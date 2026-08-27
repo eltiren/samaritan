@@ -323,6 +323,31 @@ it. [DERIVED]
    `handleNewFlow` and `handle(_:)`.
 3. The containing app reads that store to build the app list and each app's Observed list.
 
+### 5.2 Verification harness
+
+Both risks below are now testable on device without building any of the engine. See
+`tools/escalation-report.py`.
+
+1. Set **Deny mode** to `escalate` on the diagnostics screen and tap Apply. Every denied flow then
+   returns `.needRules()` instead of `.drop()`.
+2. Capture: `idevicesyslog -u "$(idevice_id -l | head -1)" -p "FilterData|FilterControl" -o ~/device.log`
+3. Tap **Run escalation stress test (40×)** — forty concurrent requests at a denied host, so forty
+   simultaneous round trips.
+4. `tools/escalation-report.py ~/device.log`
+
+The data provider logs `ESCALATE id=… t=…`; the control provider logs `CTLRECV id=… t=…` and
+`CTLDONE id=… t=… verdict=…`. Both timestamps are `CLOCK_UPTIME_RAW`, which is system-wide
+monotonic, so joining on flow id gives true cross-process latency rather than an estimate. The
+script reports how many escalations never arrived, the round-trip distribution, and whether every
+arrival produced a drop.
+
+Pass conditions:
+
+- The in-app result reads `PASS — every escalated flow was dropped`. If any request succeeded, a
+  control-provider `.drop()` does not reliably drop and **§5 must change**.
+- `never arrived` is zero. Anything else means escalation is lossy under load, deny has to be
+  decided inline, and recording falls back to `NEFilterReport` only.
+
 Remaining risks: [VERIFY]
 
 - **Volume.** Reports arrive at roughly twice the flow rate (`newFlow` and `flowClosed`), and one

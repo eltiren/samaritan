@@ -131,6 +131,52 @@ final class DiagnosticsModel {
         probeResults = results
     }
 
+    /// Fires `count` concurrent requests at a host the rules deny, to see whether the escalation
+    /// path holds up when it is the common case rather than the rare one.
+    ///
+    /// Every one of these becomes a `.needRules()` round trip under `denyMode == .escalate`. The
+    /// numbers that matter are not here but in the device log: `tools/escalation-report.py` joins
+    /// the data provider's ESCALATE lines to the control provider's CTLRECV/CTLDONE lines and
+    /// reports how many never arrived.
+    func runStressTest(count: Int = 40) async {
+        let host = configuration.blockedHostSuffixes.first
+            ?? configuration.blockedHostSubstrings.first
+            ?? "neverssl.com"
+        probeResults = ["stress: \(count) concurrent requests to \(host)…"]
+
+        let started = Date()
+        let outcomes = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for index in 0..<count {
+                group.addTask {
+                    // Distinct paths so nothing is served from cache or a reused connection.
+                    guard let url = URL(string: "http://\(host)/?samaritan-stress=\(index)") else { return false }
+                    var request = URLRequest(url: url)
+                    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                    request.timeoutInterval = 10
+                    do {
+                        _ = try await URLSession.shared.data(for: request)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            var results: [Bool] = []
+            for await outcome in group { results.append(outcome) }
+            return results
+        }
+
+        let reached = outcomes.filter { $0 }.count
+        probeResults = [
+            "stress \(count)× \(host) in \(Self.ms(since: started))",
+            "reached: \(reached)   blocked: \(count - reached)",
+            reached == 0 ? "PASS — every escalated flow was dropped"
+                         : "LEAK — \(reached) got through; escalation did not hold",
+            "control provider handled: \(snapshot[.controlFlowsHandled]), drops issued: \(snapshot[.controlDropsIssued])",
+        ]
+        refresh()
+    }
+
     private static func ms(since date: Date) -> String {
         String(format: "%.0fms", Date().timeIntervalSince(date) * 1000)
     }

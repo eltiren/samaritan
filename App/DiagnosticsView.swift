@@ -133,15 +133,23 @@ struct DiagnosticsView: View {
             Button("Run drop test") {
                 Task { await diagnostics.runProbe() }
             }
+            Button("Run escalation stress test (40×)") {
+                Task { await diagnostics.runStressTest() }
+            }
+            Picker("Deny mode", selection: $diagnostics.configuration.denyMode) {
+                Text("inline .drop()").tag(SpikeConfiguration.DenyMode.inline)
+                Text("escalate .needRules()").tag(SpikeConfiguration.DenyMode.escalate)
+            }
             ForEach(diagnostics.probeResults, id: \.self) { line in
                 Text(line).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
             }
         } header: {
             Text("Traffic generator")
         } footer: {
-            Text("Requests one blocked host and one control host. With the filter enabled the "
-                 + "blocked request should fail; the control request should succeed. Run it with "
-                 + "the VPN off, then again with the VPN connected.")
+            Text("Drop test: one blocked host and two control hosts — blocked should fail, controls "
+                 + "should succeed. Stress test: 40 concurrent requests at a blocked host, which "
+                 + "under escalate mode become 40 needRules round trips. Set the deny mode, tap "
+                 + "Apply, then run it, and join the device log with tools/escalation-report.py.")
         }
     }
 

@@ -51,6 +51,10 @@ final class FilterControlProvider: NEFilterControlProvider {
         runSandboxProbeOnce()
         var record = FlowInspector.record(for: flow, origin: .controlProvider)
 
+        // Paired with the data provider's ESCALATE line by flow id. Both use CLOCK_UPTIME_RAW,
+        // which is system-wide monotonic, so the difference is the true cross-process round trip.
+        Log.flows.log("CTLRECV id=\(record.flowIdentifier, privacy: .public) t=\(started)")
+
         let configuration = SpikeConfiguration.load()
         let rules = SpikeRuleSet(configuration: configuration)
 
@@ -66,7 +70,10 @@ final class FilterControlProvider: NEFilterControlProvider {
             record.verdict = .controlDrop
             record.matchedRule = label
             counters[.flowsDropped] = 1
-            verdict = .drop(withUpdateRules: signalRulesChange)
+            counters[.controlDropsIssued] = 1
+            // Never `withUpdateRules: true` on a drop: under escalate mode this is the common path,
+            // and each `true` triggers a handleRulesChanged in the data provider.
+            verdict = .drop(withUpdateRules: false)
         } else {
             record.verdict = .controlAllow
             record.matchedRule = signalRulesChange ? "updateRules" : ""
@@ -74,8 +81,14 @@ final class FilterControlProvider: NEFilterControlProvider {
             verdict = .allow(withUpdateRules: signalRulesChange)
         }
 
-        record.decisionNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- started
+        let finished = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        record.decisionNanos = finished &- started
         store?.append(record, incrementing: counters)
+
+        Log.flows.log("""
+            CTLDONE id=\(record.flowIdentifier, privacy: .public) t=\(finished) \
+            verdict=\(record.verdict.label, privacy: .public)
+            """)
 
         Log.flows.log("""
             CONTROL \(record.verdict.label, privacy: .public) \

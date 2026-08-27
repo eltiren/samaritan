@@ -88,22 +88,47 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         let verdict: NEFilterNewFlowVerdict
         var counters: [DiagnosticsStore.Counter: UInt64] = [.flowsObserved: 1]
 
-        if let label = rules.matchLabel(hostname: record.remoteHostname, address: record.remoteAddress) {
+        let outcome = SpikeResolver.evaluate(hostname: record.remoteHostname,
+                                             address: record.remoteAddress,
+                                             rules: rules,
+                                             denyMode: configuration.denyMode)
+
+        switch outcome {
+        case .denyInline(let label):
             record.verdict = .drop
             record.matchedRule = label
             counters[.flowsDropped] = 1
             verdict = .drop()
-        } else if configuration.controlProbeEnabled, shouldProbeControl(for: record.sourceApp) {
+
+        case .denyEscalated(let label):
             record.verdict = .needRules
-            record.matchedRule = "probe"
-            counters[.flowsNeedRules] = 1
-            // Hands this flow to FilterControlProvider in a separate process. The data provider does
-            // not see the flow again; the control provider's verdict is applied directly.
+            record.matchedRule = "escalate:\(label)"
+            counters[.flowsEscalated] = 1
+            // CLOCK_UPTIME_RAW is system-wide monotonic, so this timestamp is directly comparable
+            // with the one the control provider logs in another process. That pairing is what
+            // `tools/escalation-report.py` joins on.
+            Log.flows.log("""
+                ESCALATE id=\(record.flowIdentifier, privacy: .public) \
+                t=\(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) \
+                app=\(record.appDescription, privacy: .public) \
+                host=\(record.remoteDescription, privacy: .public) \
+                rule=\(label, privacy: .public)
+                """)
             verdict = .needRules()
-        } else {
-            record.verdict = .allow
-            counters[.flowsAllowed] = 1
-            verdict = .allow()
+
+        case .allow:
+            if configuration.controlProbeEnabled, shouldProbeControl(for: record.sourceApp) {
+                record.verdict = .needRules
+                record.matchedRule = "probe"
+                counters[.flowsNeedRules] = 1
+                // Hands this flow to FilterControlProvider in a separate process. The data provider
+                // does not see the flow again; the control provider's verdict is applied directly.
+                verdict = .needRules()
+            } else {
+                record.verdict = .allow
+                counters[.flowsAllowed] = 1
+                verdict = .allow()
+            }
         }
 
         // The only route to byte counts on iOS: opt the flow into NEFilterReport delivery.

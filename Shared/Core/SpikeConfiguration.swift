@@ -39,6 +39,19 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
     /// Emit an OSLog line per flow in addition to the ring buffer.
     public var logEveryFlow: Bool
 
+    /// How a deny is delivered. See `SpikeResolver`.
+    public enum DenyMode: String, Codable, Sendable, CaseIterable {
+        /// Data provider returns `.drop()` itself. Fastest, but the flow is never recorded anywhere
+        /// the containing app can read, because the data provider cannot write.
+        case inline
+        /// Data provider returns `.needRules()`; the control provider records the flow and returns
+        /// `.drop(withUpdateRules: false)`. The architecture `docs/firewall-rules.md` §5 depends on.
+        case escalate
+    }
+
+    /// Defaults to `.inline` so flipping this is an explicit act.
+    public var denyMode: DenyMode
+
     public static let `default` = SpikeConfiguration(
         // neverssl.com is plain HTTP with no HSTS and no connection reuse, which makes it the
         // cleanest reliable drop test on iOS: a browser cannot silently satisfy the request from
@@ -52,7 +65,8 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         controlProbeEnabled: false,
         controlProbeBudget: 32,
         requestReports: true,
-        logEveryFlow: true
+        logEveryFlow: true,
+        denyMode: .inline
     )
 
     public init(blockedHostSuffixes: [String],
@@ -61,7 +75,8 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
                 controlProbeEnabled: Bool,
                 controlProbeBudget: Int,
                 requestReports: Bool,
-                logEveryFlow: Bool) {
+                logEveryFlow: Bool,
+                denyMode: DenyMode = .inline) {
         self.blockedHostSuffixes = blockedHostSuffixes
         self.blockedHostSubstrings = blockedHostSubstrings
         self.blockedAddresses = blockedAddresses
@@ -69,6 +84,7 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         self.controlProbeBudget = controlProbeBudget
         self.requestReports = requestReports
         self.logEveryFlow = logEveryFlow
+        self.denyMode = denyMode
     }
 
     public init(from decoder: any Decoder) throws {
@@ -81,6 +97,7 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         controlProbeBudget = try container.decode(Int.self, forKey: .controlProbeBudget)
         requestReports = try container.decode(Bool.self, forKey: .requestReports)
         logEveryFlow = try container.decode(Bool.self, forKey: .logEveryFlow)
+        denyMode = try container.decodeIfPresent(DenyMode.self, forKey: .denyMode) ?? .inline
     }
 
     // MARK: - Persistence
