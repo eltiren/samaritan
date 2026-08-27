@@ -103,8 +103,11 @@ targets:
     sources:
       - path: Tests/SamaritanTests
       - path: Shared/Core
+      # The policy engine is pure Swift with no NetworkExtension import — the same property that
+      # lets the test target compile it standalone.
+      - path: Shared/Policy
       # Shared/Filtering imports NetworkExtension, which is fine in a unit-test bundle running in
-      # the simulator; the pure-Swift boundary that matters is Shared/Core, which must not.
+      # the simulator; the pure-Swift boundary that matters is Shared/Core and Shared/Policy.
       - path: Shared/Filtering
     settings:
       base:
