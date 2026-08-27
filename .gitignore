@@ -1,0 +1,14 @@
+# XcodeGen output — regenerate with `xcodegen generate`. Never commit.
+*.xcodeproj/
+*.xcworkspace/
+
+# Xcode / build
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/

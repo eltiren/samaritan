@@ -1,0 +1,125 @@
+name: Samaritan
+
+# ---------------------------------------------------------------------------
+# project.yml is the SOURCE OF TRUTH. Samaritan.xcodeproj is generated output.
+# Never edit project.pbxproj by hand — see AGENTS.md.
+# ---------------------------------------------------------------------------
+
+options:
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: false
+
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    # The App Group is derived from PRODUCT_BUNDLE_PREFIX in Config/Signing.xcconfig
+    # and injected into every Info.plist as SamaritanAppGroupIdentifier.
+    SAMARITAN_APP_GROUP: group.$(PRODUCT_BUNDLE_PREFIX)
+
+targets:
+
+  # -------------------------------------------------------------------------
+  # Container app: NEFilterManager configuration + diagnostics UI.
+  # -------------------------------------------------------------------------
+  Samaritan:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_PREFIX)
+        PRODUCT_NAME: Samaritan
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Samaritan.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - target: FilterData
+        embed: true
+        codeSign: true
+      - target: FilterControl
+        embed: true
+        codeSign: true
+
+  # -------------------------------------------------------------------------
+  # NEFilterDataProvider — the hot path. Sees every flow, returns a verdict.
+  # -------------------------------------------------------------------------
+  FilterData:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FilterData
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_PREFIX).FilterData
+        PRODUCT_NAME: FilterData
+        INFOPLIST_FILE: FilterData/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FilterData/FilterData.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+
+  # -------------------------------------------------------------------------
+  # NEFilterControlProvider — reached only via .needRules() from FilterData.
+  # -------------------------------------------------------------------------
+  FilterControl:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FilterControl
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_PREFIX).FilterControl
+        PRODUCT_NAME: FilterControl
+        INFOPLIST_FILE: FilterControl/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FilterControl/FilterControl.entitlements
+        GENERATE_INFOPLIST_FILE: NO
+
+  # -------------------------------------------------------------------------
+  # Unit tests. Compiles Shared/Core standalone — which is exactly the point:
+  # Shared/Core must never import NetworkExtension.
+  # -------------------------------------------------------------------------
+  SamaritanTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/SamaritanTests
+      - path: Shared/Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_PREFIX).Tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+
+schemes:
+  Samaritan:
+    build:
+      targets:
+        # ONLY the app. XcodeGen sorts a scheme's build targets alphabetically and treats the first
+        # one as the scheme's runnable — listing the extensions here put FilterControl first, which
+        # produced `wasCreatedForAppExtension = YES` and a scheme that tried to launch an .appex.
+        # The extensions are already `dependencies:` of the app with `embed: true`, so
+        # `buildImplicitDependencies` builds and embeds both.
+        Samaritan: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SamaritanTests

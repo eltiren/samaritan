@@ -1,0 +1,20 @@
+// Samaritan — local signing configuration.
+//
+// The source of truth for signing. Change these here and run `xcodegen generate`; do NOT set them
+// through Xcode's UI, which writes into the disposable .xcodeproj.
+//
+// To keep your Team ID out of future commits:
+//     git update-index --skip-worktree Config/Signing.xcconfig
+
+// 10-character Apple Developer Team ID (Xcode > Settings > Accounts, or the developer portal
+// under Membership details).
+DEVELOPMENT_TEAM = HT45756S2G
+
+// Reverse-DNS prefix you control. This becomes:
+//   app             $(PRODUCT_BUNDLE_PREFIX)
+//   data provider   $(PRODUCT_BUNDLE_PREFIX).FilterData
+//   control provider$(PRODUCT_BUNDLE_PREFIX).FilterControl
+//   App Group       group.$(PRODUCT_BUNDLE_PREFIX)
+//
+// All four must exist in the developer portal (see README "Portal setup").
+PRODUCT_BUNDLE_PREFIX = com.eltiren.samaritan
