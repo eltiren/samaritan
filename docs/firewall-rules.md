@@ -120,7 +120,7 @@ an Apple bundle ID is hardcoded into the resolver; it only sets the initial valu
 
 The requirement said the global lists *"take priority over the whole app"*, and also that an allowed
 domain is *"allowed for every app **unless it is specifically banned for that app**"*. Read literally
-those contradict each other. [Q2]
+those contradict each other.
 
 They reconcile if "priority over the whole app" means priority over the app's **blanket** setting
 (the Allow-all toggle and the Apple exemption), not over the app's **specific** host rules. That is
@@ -155,7 +155,33 @@ flowchart TD
     H --> DENY
 ```
 
-### 2.5 Tie-breaking
+### 2.5 Worked examples
+
+Non-obvious outcomes, spelled out so they are not discovered later as bugs.
+
+| # | Rules in play | Flow | Result | Why |
+|---|---|---|---|---|
+| 1 | global user list: ALLOW `apple.com`<br>Slack deny list: `apple.com` | Slack → `apple.com` | **DROP** | L1 beats L2. The stated example. |
+| 2 | " | Mail → `apple.com` | **ALLOW** | No L1 rule for Mail, so L2 decides. |
+| 3 | web list: DENY `tracker.example`<br>Slack allow list: `tracker.example` | Slack → `tracker.example` | **ALLOW** | L1 beats L3, symmetric with #1. |
+| 4 | Slack: Allow all **ON**<br>web list: DENY `ads.example` | Slack → `ads.example` | **DROP** | L3 beats the blanket setting. |
+| 5 | global user list: ALLOW `*.slack.com`<br>WhatsApp: no rules, deny-all | WhatsApp → `edge.slack.com` | **ALLOW** | A global allow reaches every app, including untriaged ones. |
+| 6 | Slack allow list: `*.example.com`<br>web list: DENY `s1.example.com` | Slack → `s1.example.com` | **ALLOW** | **Tier beats specificity.** The broader per-app rule wins because L1 is consulted first. |
+| 7 | global user list: DENY `*.google.com` | Safari → `google.com` | **ALLOW** | `*.x` is strictly subdomains — the apex needs its own rule. See below. |
+| 8 | " | Safari → `www.google.com` | **DROP** | Subdomain, so it matches. |
+| 9 | Slack allow list: `1.2.3.0/24` | Slack → `s1.slack.com`, address `::` | **DROP** | The flow carried no address, so an address rule cannot match; falls to deny-all. |
+| 10 | Safari: Allow all **OFF** | Safari → anything | **DROP** + Observed | The Apple default is just a toggle value. |
+
+**Example 7 matters for the test you already ran.** The milestone-1 experiment used a *substring*
+rule (`google`), which caught `google.com`, `googleapis.com` and `googlevideo.com` alike. Under this
+model, `*.google.com` blocks subdomains only — not the apex, and not `googleapis.com` at all. Getting
+the same coverage needs several rules. Two consequences worth deciding later, neither in scope here:
+
+- whether the substring rule type survives into the real engine as a first-class kind, and
+- whether the popover should offer a "domain and all subdomains" one-tap action that writes both
+  rules at once, since that is what people almost always mean.
+
+### 2.6 Tie-breaking
 
 Within a tier: [PROPOSED]
 
@@ -173,10 +199,16 @@ Within a tier: [PROPOSED]
 
 Two kinds:
 
-| Kind | Written | Matches |
-|---|---|---|
-| Exact | `s1.c1.status.example.com` | that name only |
-| Suffix | `*.example.com` | `example.com` **and** every subdomain [Q3] |
+| Kind | Written | Matches | Does **not** match |
+|---|---|---|---|
+| Exact | `s1.c1.status.example.com` | that name only | anything else |
+| Subdomain | `*.example.com` | any descendant at any depth: `a.example.com`, `a.b.c.example.com` | `example.com` itself |
+
+`*.X` is **strictly** subdomains — it never covers the apex. Covering both takes two rules.
+
+The apex is still reachable from the UI: a flow *to* `example.com` produces its own chain
+(`example.com`, then `*.com`), so the exact rule appears the moment the apex is actually contacted.
+Nothing is unreachable; it just cannot be created pre-emptively from a subdomain's popover.
 
 For a flow to `s1.c1.status.example.com`, the popover offers exactly the chain from the stated
 requirement — the full name, then one entry per parent as labels are dropped from the left:
@@ -200,17 +232,19 @@ Matching is case-insensitive on the normalised form.
 Stored internally as **`(address, prefixLength)`** — always a CIDR prefix, never a wildcard string.
 The octet-wildcard UI from the requirement is a *presentation* of four preset prefix lengths:
 
-| Shown | Stored |
+**CIDR is the canonical form everywhere**, including in the UI. For IPv4 the octet wildcard from the
+original requirement is kept as a secondary label, because it reads more naturally at a glance:
+
+| IPv4 preset | IPv6 preset |
 |---|---|
-| `8.8.8.8` | `8.8.8.8/32` |
-| `8.8.8.x` | `8.8.8.0/24` |
-| `8.8.x.x` | `8.8.0.0/16` |
-| `8.x.x.x` | `8.0.0.0/8` |
+| `8.8.8.8/32` — `8.8.8.8` | `2606:4700:4700::1111/128` |
+| `8.8.8.0/24` — `8.8.8.x` | `2606:4700:4700::/64` |
+| `8.8.0.0/16` — `8.8.x.x` | `2606:4700::/48` |
+| `8.0.0.0/8` — `8.x.x.x` | `2606:4700::/32` |
 
-Storing prefixes rather than wildcard strings is what lets the same structure hold imported CIDR
-feeds and, later, a radix trie, without a second rule format. [DERIVED]
-
-IPv6 has no dotted-octet form, so the equivalent presets need choosing. [Q4]
+The presets are shortcuts, not the whole vocabulary: the global list editor accepts any prefix
+length. Storing prefixes rather than wildcard strings is what lets the same structure hold imported
+CIDR feeds and, later, a radix trie, without a second rule format. [DERIVED]
 
 ### 3.3 What rules do *not* cover
 
@@ -237,9 +271,19 @@ Web list mechanics: [PROPOSED]
 - Format: one entry per line; `#` starts a comment; an entry is a domain, a `*.`-prefixed suffix,
   an IP, or a CIDR. Hosts-file format (`0.0.0.0 badhost.example`) is detected and the address column
   ignored.
+- **A bare domain in a web list expands to exact + subdomains**, unlike a hand-written rule. [PROPOSED]
+  Every blocklist in circulation writes `doubleclick.net` meaning "and everything under it"; applying
+  the strict semantics of §3.1 to imported entries would under-block by a wide margin and silently.
+  An explicit `*.x` entry in a list still means subdomains only. The list detail screen states which
+  interpretation was applied.
 - Refresh on a user-set interval, and on demand.
-- **A failed refresh keeps the last good copy** rather than dropping the list — dropping a deny list
-  on a network error fails open. [Q5] covers the inverse case.
+- **A subscription cannot be created until its first fetch succeeds.** The add-list flow is not
+  completable against an unreachable or unparseable URL, so an empty-because-never-fetched list
+  cannot exist.
+- **A failed *refresh* keeps the last good copy** rather than dropping the list — dropping a deny
+  list on a network error fails open. Since the first fetch is mandatory, there is always a last
+  good copy. The list screen shows the last successful fetch time and flags a subscription whose
+  refresh has been failing.
 - A per-list cap on entry count, with truncation reported rather than silent.
 
 ---
@@ -300,7 +344,10 @@ by L6. [STATED]
   Firebase burst must collapse to one row, not eight, so the hostname is the natural key. Each row
   keeps the set of addresses seen for it.
 - Each row records: first seen, last seen, attempt count, addresses seen, ports.
-- Bounded per app, evicting least-recently-seen. [Q6]
+- **Bounded per app** — a few hundred rows — evicting least-recently-seen, and **persisted across
+  launches and reboots**. Under permanent deny an app retries indefinitely, so the bound is what
+  stops the store growing without limit; coalescing by hostname is what stops one retry storm
+  evicting everything else.
 
 ---
 
@@ -378,7 +425,7 @@ what the milestone-1 `google` test relied on, and that test still works under th
 Safari's Allow-all off puts all web traffic under default-deny and into the Observed list.
 
 **Default-deny will break most third-party apps immediately.** That is the intent, but it means
-first run is unusable until the user has worked through the Observed lists. See [Q8].
+first run is unusable until the user has worked through the Observed lists — accepted, see Q8.
 
 **Local and link-local traffic is in scope.** `rapportd` reaching `fe80::` peers has no hostname and
 no useful address rule; under default-deny, Handoff, AirDrop and AirPlay stop working. It is
@@ -398,12 +445,13 @@ simply lacked the field the rule keys on. The Observed list should show which fi
 
 ## 9. Questions
 
-**Resolved:** Q1 Apple exemption is a default, not an override · Q2 precedence is symmetric ·
-Q7 private `LSApplicationProxy` for icons · Q8 no monitor mode · Q9 blanket settings are mirrors,
-consulted last.
+**All nine resolved.** Q1 Apple exemption is a default, not an override · Q2 precedence is symmetric ·
+Q3 `*.x` is strictly subdomains · Q4 CIDR is canonical · Q5 a web list must fetch before it can be
+added · Q6 Observed list is bounded and persisted · Q7 private `LSApplicationProxy` for icons ·
+Q8 no monitor mode · Q9 blanket settings are mirrors, consulted last.
 
-**Still open:** Q3 suffix apex · Q4 IPv6 presets · Q5 web-list failure mode · Q6 Observed list
-bounds. Each has a proposed default, so none blocks implementation.
+The remaining `[PROPOSED]` items are implementation choices rather than product decisions, and the
+`[VERIFY]` items in §5 are the only things that could still force a design change.
 
 **[Q1] Apple exemption vs global lists — RESOLVED.**
 The exemption is a blanket **default**, not an override: L5 sits below L2/L3, so global lists and
@@ -414,22 +462,22 @@ per-app rules apply to Apple apps and Safari remains filterable. "`com.apple.*` 
 Symmetric. L1 beats L2/L3 in both directions; a per-app allow overrides a global deny just as a
 per-app deny overrides a global allow.
 
-**[Q3] Does `*.example.com` include `example.com` itself?**
-The specificity chain never offers bare `example.com`, so if `*.example.com` excludes the apex there
-is no way to reach it from the popover.
-*Proposed:* suffix rules include the apex.
+**[Q3] Suffix apex — RESOLVED: `*.example.com` does not cover `example.com`.**
+Strict subdomain semantics. Covering both takes two rules. The apex is still reachable from the UI
+because a flow to the apex generates its own chain. One consequence: imported web lists use the
+opposite convention, so a bare domain in a list expands to exact + subdomains — see §4.
 
-**[Q4] What are the IPv6 presets?**
-Octet wildcards are IPv4-only.
-*Proposed:* `/128`, `/64`, `/48`, `/32`, displayed in CIDR form rather than as a wildcard string.
+**[Q4] Address notation — RESOLVED: CIDR.**
+CIDR is canonical everywhere, with the IPv4 octet wildcard kept as a secondary label. Presets are
+`/32 /24 /16 /8` and `/128 /64 /48 /32`; the global list editor accepts any prefix length.
 
-**[Q5] Fail-open or fail-closed on an unavailable web list?**
-Proposed above: keep the last good copy. But on first-ever fetch there is no last good copy.
-*Proposed:* a subscription that has never fetched successfully contributes nothing, and the UI shows
-it as failed rather than silently empty.
+**[Q5] Web list failure — RESOLVED.**
+A subscription cannot be added unless the first fetch succeeds, so the never-fetched case cannot
+exist. Later refresh failures keep the last good copy and are surfaced on the list screen.
 
-**[Q6] How large is the Observed list, and does it survive a reboot?**
-*Proposed:* bounded per app (a few hundred rows), least-recently-seen eviction, persisted.
+**[Q6] Observed list bounds — RESOLVED.**
+Bounded per app at a few hundred rows, least-recently-seen eviction, persisted across launches and
+reboots.
 
 **[Q7] App icons and names — RESOLVED.**
 Private `LSApplicationProxy`, with the isolation and fallback constraints in §7.1. The app is not
