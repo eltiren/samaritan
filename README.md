@@ -649,8 +649,41 @@ hot path.
 
 - The data provider cannot persist anything. Counters, history and statistics must either go through
   `OSLog` or be limited to flows escalated to the control provider.
-- `.needRules()` costs ~3–14 ms round trip and loses connection races. Out-of-band signalling only.
+- `.needRules()` latency is **bimodal**: ~1.4 ms median warm, up to ~28 ms cold. The ~13 ms figure
+  measured in milestone 1 was a cold start including process launch — see *Milestone 1.5* below. It
+  is a usable path for flows that are being denied anyway; it is still the wrong tool for deciding
+  a flow that might be allowed, because a cold escalation loses connection races.
 - Hot-path VPN detection is `NWPath.usesInterfaceType(.other)`. `getifaddrs` returns nothing.
+
+## Milestone 1.5 — escalation verified
+
+The rule model in [`docs/firewall-rules.md`](docs/firewall-rules.md) routes default-denied flows
+through `.needRules()` so the control provider — the only one of the three processes that can write
+— records them. Two things had to be true for that to work, and neither had been tested.
+
+Measured on device: 40 concurrent requests at a denied host, `denyMode = escalate`.
+
+| Question | Result |
+|---|---|
+| Does a control-provider `.drop()` actually drop the flow? | **✅ YES** — app-side `PASS`; all 40 requests failed on the wire, none inconclusively |
+| Does escalation survive being the common case? | **✅ YES** — 41 escalated, 41 arrived, 0 lost, 41 answered `ctl-DROP` |
+
+```
+data -> control round trip (ms)   min 0.92   p50 1.36   p95 5.20   max 28.16
+control provider own work (ms)    min 0.06   p50 0.09   p95 0.27   max  1.11
+```
+
+**This corrects a milestone-1 conclusion.** The ~13 ms round trip recorded earlier was a cold start
+including process launch. Warm, the median is 1.36 ms with 90 µs of that being the control
+provider's own work; the 28 ms maximum is the first escalation of the run. Escalation latency is
+bimodal — cheap while the control provider is active, expensive when it must be woken.
+
+Also found: **escalated flows produce no `NEFilterReport`.** `NEFilterControlVerdict` inherits
+`shouldReport` but nothing sets it, so no `flowClosed` event and no byte counts arrive. Harmless for
+denial, but it means the report channel cannot be used to confirm that a drop took effect.
+
+Reproduce with `tools/escalation-report.py`; the procedure is in
+[`docs/firewall-rules.md` §5.2](docs/firewall-rules.md).
 
 ## References
 

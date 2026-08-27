@@ -364,6 +364,11 @@ control provider own work (ms)
   min    0.06   p50    0.09   p95    0.27   max    1.11
 ```
 
+App-side result: **PASS — every escalated flow was dropped.** Every one of the 40 requests failed on
+the wire, none inconclusively.
+
+- **A control-provider `.drop()` does drop the flow.** This was the untested half of the design;
+  milestone 1 only ever exercised control verdicts of `allow`. §5 is now verified, not assumed.
 - **Escalation is not lossy at this rate.** 41 of 41 arrived. The control provider kept up with 40
   simultaneous round trips.
 - **The round trip is far cheaper than milestone 1 suggested.** The ~13 ms figure was a cold start
