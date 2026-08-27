@@ -146,13 +146,15 @@ final class DiagnosticsModel {
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             request.timeoutInterval = 8
             let started = Date()
+            let outcome: ProbeOutcome
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                results.append("\(target.label) \(url.host ?? "") → HTTP \(code), \(data.count) bytes, \(Self.ms(since: started))")
+                outcome = .reached(status: (response as? HTTPURLResponse)?.statusCode ?? -1,
+                                   bytes: data.count)
             } catch {
-                results.append("\(target.label) \(url.host ?? "") → \((error as NSError).code) \(error.localizedDescription), \(Self.ms(since: started))")
+                outcome = ProbeOutcome.classify(error)
             }
+            results.append("\(target.label) \(url.host ?? "") → \(outcome.label), \(Self.ms(since: started))")
         }
         probeResults = results
     }
@@ -171,35 +173,50 @@ final class DiagnosticsModel {
         probeResults = ["stress: \(count) concurrent requests to \(host)…"]
 
         let started = Date()
-        let outcomes = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+        let outcomes = await withTaskGroup(of: ProbeOutcome.self, returning: [ProbeOutcome].self) { group in
             for index in 0..<count {
                 group.addTask {
                     // Distinct paths so nothing is served from cache or a reused connection.
-                    guard let url = URL(string: "http://\(host)/?samaritan-stress=\(index)") else { return false }
+                    guard let url = URL(string: "http://\(host)/?samaritan-stress=\(index)") else {
+                        return .inconclusive(reason: "bad URL")
+                    }
                     var request = URLRequest(url: url)
                     request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                     request.timeoutInterval = 10
                     do {
-                        _ = try await URLSession.shared.data(for: request)
-                        return true
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        return .reached(status: (response as? HTTPURLResponse)?.statusCode ?? -1,
+                                        bytes: data.count)
                     } catch {
-                        return false
+                        return ProbeOutcome.classify(error)
                     }
                 }
             }
-            var results: [Bool] = []
+            var results: [ProbeOutcome] = []
             for await outcome in group { results.append(outcome) }
             return results
         }
 
-        let reached = outcomes.filter { $0 }.count
-        probeResults = [
+        let blocked = outcomes.filter(\.provesFiltering).count
+        let inconclusive = outcomes.filter(\.isInconclusive).count
+        let reached = count - blocked - inconclusive
+
+        var lines = [
             "stress \(count)× \(host) in \(Self.ms(since: started))",
-            "reached: \(reached)   blocked: \(count - reached)",
-            reached == 0 ? "PASS — every escalated flow was dropped"
-                         : "LEAK — \(reached) got through; escalation did not hold",
-            "control provider handled: \(snapshot[.controlFlowsHandled]), drops issued: \(snapshot[.controlDropsIssued])",
+            "blocked: \(blocked)   reached: \(reached)   inconclusive: \(inconclusive)",
         ]
+        if inconclusive > 0 {
+            // Never claim a pass off requests that never reached the wire — that is exactly how the
+            // neverssl.com ATS false positive slipped through.
+            lines.append("INVALID — \(inconclusive) never created a flow, so nothing was tested")
+            if let reason = outcomes.first(where: \.isInconclusive) { lines.append(reason.label) }
+        } else if reached > 0 {
+            lines.append("LEAK — \(reached) got through; escalation did not hold")
+        } else {
+            lines.append("PASS — every escalated flow was dropped")
+        }
+        lines.append("control handled: \(snapshot[.controlFlowsHandled]), drops issued: \(snapshot[.controlDropsIssued])")
+        probeResults = lines
         refresh()
     }
 

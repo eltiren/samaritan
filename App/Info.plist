@@ -20,6 +20,28 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- The drop test deliberately targets plain HTTP: neverssl.com has no HSTS and no long-lived
+	     connection reuse, which is what makes it a clean drop target. Without these exceptions ATS
+	     refuses the request in-process with -1022 and no socket is ever created, so the filter never
+	     sees the flow and the test silently measures nothing. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>neverssl.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>captive.apple.com</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>SamaritanAppGroupIdentifier</key>
