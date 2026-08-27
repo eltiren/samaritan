@@ -12,15 +12,21 @@ struct DiagnosticsView: View {
     var body: some View {
         NavigationStack {
             List {
-                statusSection
-                vpnSection
-                ringsSection
-                countersSection
-                probeSection
-                configurationSection
-                flowsSection
+                // `.listRowBackground` has to be attached per Section — applied to the List it
+                // never reaches rows nested inside one, which left every row on the system fill.
+                statusSection.icebergRows()
+                vpnSection.icebergRows()
+                ringsSection.icebergRows()
+                countersSection.icebergRows()
+                probeSection.icebergRows()
+                configurationSection.icebergRows()
+                flowsSection.icebergRows()
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .foregroundStyle(Theme.textPrimary)
+            .tint(Theme.accent)
             .navigationTitle("Samaritan")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -54,12 +60,12 @@ struct DiagnosticsView: View {
             LabeledContent("App Group", value: diagnostics.appGroupIdentifier.isEmpty
                            ? "MISSING" : diagnostics.appGroupIdentifier)
             LabeledContent("Shared container", value: diagnostics.containerAvailable ? "available" : "UNAVAILABLE")
-                .foregroundStyle(diagnostics.containerAvailable ? Color.primary : Color.red)
+                .foregroundStyle(diagnostics.containerAvailable ? Theme.textPrimary : Theme.deny)
 
             if let detail = filter.lastErrorDetail {
                 Text(detail)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Theme.deny)
                     .textSelection(.enabled)
             }
         }
@@ -68,7 +74,7 @@ struct DiagnosticsView: View {
     private var vpnSection: some View {
         Section {
             LabeledContent("Tunnel interface", value: diagnostics.isVPNActive ? "PRESENT" : "none")
-                .foregroundStyle(diagnostics.isVPNActive ? Color.green : Color.primary)
+                .foregroundStyle(diagnostics.isVPNActive ? Theme.allow : Theme.textPrimary)
             ForEach(diagnostics.displayInterfaces, id: \.self) { interface in
                 LabeledContent {
                     Text(interface.address).font(.system(.caption, design: .monospaced))
@@ -93,7 +99,7 @@ struct DiagnosticsView: View {
                 let written = diagnostics.perWriter[writer]?.totalWritten ?? 0
                 LabeledContent("\(writer.rawValue).ring") {
                     Text(written == 0 ? "no records" : "\(written) records")
-                        .foregroundStyle(written == 0 ? Color.orange : Color.primary)
+                        .foregroundStyle(written == 0 ? Theme.warning : Theme.textPrimary)
                 }
             }
         } header: {
@@ -187,12 +193,12 @@ struct DiagnosticsView: View {
                 if let written = diagnostics.configurationWrittenAt {
                     Text(written, format: .dateTime.hour().minute().second())
                 } else {
-                    Text("NOT WRITTEN").foregroundStyle(Color.orange)
+                    Text("NOT WRITTEN").foregroundStyle(Theme.warning)
                 }
             }
 
             if let error = diagnostics.configurationError {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.footnote).foregroundStyle(Theme.deny)
             }
         } header: {
             Text("Spike configuration")
@@ -207,7 +213,7 @@ struct DiagnosticsView: View {
     private var flowsSection: some View {
         Section("Recent flows (\(diagnostics.snapshot.records.count))") {
             if diagnostics.snapshot.records.isEmpty {
-                Text("No flows recorded yet.").foregroundStyle(.secondary)
+                Text("No flows recorded yet.").foregroundStyle(Theme.textSecondary)
             }
             ForEach(diagnostics.snapshot.records.prefix(100)) { record in
                 FlowRow(record: record)
@@ -222,6 +228,13 @@ struct DiagnosticsView: View {
     }
 }
 
+private extension View {
+    func icebergRows() -> some View {
+        listRowBackground(Theme.surface)
+            .listRowSeparatorTint(Theme.textSecondary.opacity(0.3))
+    }
+}
+
 private struct FlowRow: View {
     let record: FlowRecord
 
@@ -230,23 +243,23 @@ private struct FlowRow: View {
             HStack {
                 Text(record.verdict.label)
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(record.verdict.isDrop ? Color.red : Color.secondary)
+                    .foregroundStyle(Theme.color(for: record.verdict))
                 Text(record.origin == .dataProvider ? "D" : "C")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(Theme.textSecondary)
                 Text(record.remoteDescription)
                     .font(.system(.caption, design: .monospaced))
                     .lineLimit(1)
                 Spacer()
                 Text(record.timestamp, format: .dateTime.hour().minute().second())
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(Theme.textSecondary)
             }
             Text(record.appDescription)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
             Text(detail)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .lineLimit(2)
         }
         .textSelection(.enabled)
