@@ -91,17 +91,32 @@ INPUT  flow { app, hostname?, address?, port, proto }
   │      subscribed, read-only
   │      most specific match wins; DENY wins a tie
   │
-  ├─ L4  PER-APP BLANKET
-  │      app."Allow all" toggle ON  →  ALLOW
-  │
-  ├─ L5  SYSTEM APPS
-  │      teamID empty && bundleID starts com.apple.  →  ALLOW
-  │
-  └─ L6  DEFAULT
-         DENY, and record the flow in this app's Observed list
+  └─ L4  APP BLANKET DEFAULT ......................... always terminal
+         "Allow all" ON            →  ALLOW
+         Apple system app          →  ALLOW      (ships with Allow-all pre-enabled)
+         otherwise                 →  DENY, and record in this app's Observed list
 ```
 
-### 2.2 Why this order
+### 2.2 Blanket settings are only a default
+
+The app's blanket setting is the **last** thing consulted, never an override:
+
+| Blanket state | Means |
+|---|---|
+| **Allow all** | allow everything **not** banned by this app's deny list or by any global deny list |
+| **Deny all** (default) | deny everything **not** permitted by this app's allow list or by any global allow list |
+
+They are exact mirrors, and both lose to every tier above them. The stated core rule — *"DENY ALL,
+everything else is an exception pyramid"* — is precisely the second row: it is the blanket default
+for apps that have no blanket setting of their own.
+
+This also collapses what were two separate tiers. **The Apple exemption is not a special tier — it
+is `Allow all` shipped pre-enabled for `com.apple.*` apps.** [PROPOSED] Same code path, same
+precedence, and it gains a useful property: the toggle stays writable, so Safari can be dropped to
+default-deny and triaged like any other app when you want full control of web traffic. Nothing about
+an Apple bundle ID is hardcoded into the resolver; it only sets the initial value of one toggle.
+
+### 2.3 Why this order
 
 The requirement said the global lists *"take priority over the whole app"*, and also that an allowed
 domain is *"allowed for every app **unless it is specifically banned for that app**"*. Read literally
@@ -120,7 +135,7 @@ Two consequences, both confirmed:
 - **Precedence is symmetric.** A per-app allow overrides a global deny, exactly mirroring a per-app
   deny overriding a global allow. L1 always wins in both directions.
 
-### 2.3 Decision diagram
+### 2.4 Decision diagram
 
 ```mermaid
 flowchart TD
@@ -134,15 +149,13 @@ flowchart TD
     D -->|no match| E{Global web list matches?}
     E -->|allow| ALLOW
     E -->|deny| DENY
-    E -->|no match| F{App: Allow all ON?}
-    F -->|yes| ALLOW
-    F -->|no| G{Apple system app?}
-    G -->|yes| ALLOW
-    G -->|no| H[Record in Observed list]
+    E -->|no match| F{"App blanket default<br/>(Apple apps ship Allow-all ON)"}
+    F -->|Allow all| ALLOW
+    F -->|Deny all| H[Record in Observed list]
     H --> DENY
 ```
 
-### 2.4 Tie-breaking
+### 2.5 Tie-breaking
 
 Within a tier: [PROPOSED]
 
@@ -333,7 +346,10 @@ apply. Constraints on how it is used: [PROPOSED]
 
 Top to bottom, as specified: [STATED]
 
-1. **Allow all** — toggle, default off.
+1. **Allow all** — toggle. Default off, except for `com.apple.*` apps, which ship with it on.
+   It means *allow everything I have not specifically denied, and that no global deny list bans* —
+   not "allow everything". Turning it **off** for an Apple app is supported and puts that app under
+   default-deny like any other.
 2. **Allowed** — this app's allow rules.
 3. **Denied** — this app's deny rules.
 4. **Observed** — attempted, undecided, and therefore dropped.
@@ -356,18 +372,18 @@ Opened by tapping any row in any of the three lists. Contents:
 
 ## 8. Consequences worth stating plainly
 
-**The Apple exemption is very wide.** `com.apple.*` includes `com.apple.mobilesafari`, so under L5
-all web browsing is exempt from filtering. The milestone-1 test that blocked `google` and visibly
-killed Search and YouTube was operating on Safari's flows — that exact test would no longer block
-anything under this model. See [Q1]; this is the single most consequential open question here.
+**Safari is filterable, and can be locked down entirely.** `com.apple.mobilesafari` ships with
+Allow-all on, so it is unfiltered *by default* — but a global deny list still applies to it, which is
+what the milestone-1 `google` test relied on, and that test still works under this model. Turning
+Safari's Allow-all off puts all web traffic under default-deny and into the Observed list.
 
 **Default-deny will break most third-party apps immediately.** That is the intent, but it means
 first run is unusable until the user has worked through the Observed lists. See [Q8].
 
 **Local and link-local traffic is in scope.** `rapportd` reaching `fe80::` peers has no hostname and
 no useful address rule; under default-deny, Handoff, AirDrop and AirPlay stop working. It is
-`com.apple.rapportd`, so L5 currently rescues it — but only while [Q1] resolves in favour of the
-blanket allow. [DERIVED]
+`com.apple.rapportd`, so its pre-enabled Allow-all rescues it — and turning that toggle off is how
+you would find out exactly what Continuity talks to. [DERIVED]
 
 **Blocking a flow does not prevent the DNS lookup.** Name resolution happens in the system resolver,
 not in the app's process, and is a separate flow attributed to a system daemon. Hostname rules
@@ -383,10 +399,11 @@ simply lacked the field the rule keys on. The Observed list should show which fi
 ## 9. Questions
 
 **Resolved:** Q1 Apple exemption is a default, not an override · Q2 precedence is symmetric ·
-Q7 private `LSApplicationProxy` for icons · Q8 no monitor mode.
+Q7 private `LSApplicationProxy` for icons · Q8 no monitor mode · Q9 blanket settings are mirrors,
+consulted last.
 
 **Still open:** Q3 suffix apex · Q4 IPv6 presets · Q5 web-list failure mode · Q6 Observed list
-bounds · Q9 Allow-all vs per-app deny. Each has a proposed default, so none blocks implementation.
+bounds. Each has a proposed default, so none blocks implementation.
 
 **[Q1] Apple exemption vs global lists — RESOLVED.**
 The exemption is a blanket **default**, not an override: L5 sits below L2/L3, so global lists and
@@ -436,11 +453,11 @@ What this does mean, stated plainly:
 - Triaging from a deny-everything baseline shows you what an app *asks for*, not what it *needs*.
   Expect to over-allow at first and tighten later; the alternative was never going to be better.
 
-**[Q9] Should Allow-all coexist with a per-app deny list?**
-With Allow-all ON, L1 still runs first, so per-app denies remain effective. Confirming that is
-intended: the toggle means "allow everything I have not specifically denied", not "allow
-everything".
-*Proposed:* as described — L1 always wins.
+**[Q9] Allow-all vs per-app deny — RESOLVED.**
+Allow-all means *allow everything not banned by this app's deny list or by a global deny list*, and
+Deny-all is its exact mirror: *deny everything not permitted by this app's allow list or by a global
+allow list*. Both are blanket defaults consulted last. Consequently the Apple exemption is modelled
+as `Allow all` pre-enabled rather than as a resolver tier of its own.
 
 ---
 
