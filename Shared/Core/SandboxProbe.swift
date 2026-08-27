@@ -18,6 +18,17 @@ public enum SandboxProbe {
         public let detail: String
     }
 
+    /// Compact one-line form, e.g. `container=OK create=FAIL write=FAIL readRO=OK private=OK ifaces=OK`.
+    public static func summary(of results: [Result]) -> String {
+        func status(_ name: String) -> String {
+            guard let match = results.first(where: { $0.name == name }) else { return "?" }
+            return match.ok ? "OK" : "FAIL"
+        }
+        return "container=\(status("containerURL")) create=\(status("open(O_CREAT|O_RDWR)")) "
+            + "write=\(status("write")) readRO=\(status("openRO(control.ring)")) "
+            + "private=\(status("privateContainerWrite")) ifaces=\(status("getifaddrs"))"
+    }
+
     @discardableResult
     public static func run() -> [Result] {
         var results: [Result] = []
@@ -120,18 +131,13 @@ public enum SandboxProbe {
     }
 
     private static func emit(_ results: [Result]) {
-        func status(_ name: String) -> String {
-            guard let match = results.first(where: { $0.name == name }) else { return "?" }
-            return match.ok ? "OK" : "FAIL"
-        }
-        Log.storage.log("""
-            [\(Log.process, privacy: .public)] ▶ PROBE SUMMARY \
-            container=\(status("containerURL"), privacy: .public) \
-            create=\(status("open(O_CREAT|O_RDWR)"), privacy: .public) \
-            write=\(status("write"), privacy: .public) \
-            readRO=\(status("openRO(control.ring)"), privacy: .public) \
-            private=\(status("privateContainerWrite"), privacy: .public) \
-            ifaces=\(status("getifaddrs"), privacy: .public)
+        // Deliberately on the Flows logger. Empirically, `idevicesyslog` delivers messages from the
+        // Flows category from these extensions but not from Storage/DataProvider/ControlProvider;
+        // Console.app shows all of them. Until that is understood, the one line that matters rides
+        // the channel known to work.
+        Log.flows.log("""
+            [\(Log.process, privacy: .public)] PROBE SUMMARY \
+            \(summary(of: results), privacy: .public)
             """)
         for result in results {
             Log.storage.log("""

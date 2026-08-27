@@ -29,7 +29,10 @@ public enum FlowInspector {
         var record = FlowRecord()
         record.origin = origin
         record.timestamp = Date()
-        record.flowIdentifier = String(flow.identifier.uuidString.prefix(8))
+        // Full UUID, not a prefix. On device, four rapportd flows to four different endpoints
+        // all logged the same 8-char prefix, which could be a genuine shared identifier for one
+        // raced connection or just a truncation collision. The full value distinguishes them.
+        record.flowIdentifier = flow.identifier.uuidString
         record.sourceApp = flow.sourceAppIdentifier ?? ""
         record.sourceAppVersion = flow.sourceAppVersion ?? ""
         record.direction = UInt8(clamping: flow.direction.rawValue)
@@ -49,12 +52,13 @@ public enum FlowInspector {
             }
 
             let remote = describe(socketFlow.remoteFlowEndpoint)
-            record.remoteAddress = remote.address
+            record.remoteAddress = isUnspecified(remote.address) ? "" : remote.address
             record.remotePort = remote.port
             if record.remoteHostname.isEmpty { record.remoteHostname = remote.hostname }
 
             let local = describe(socketFlow.localFlowEndpoint)
-            record.localAddress = local.address.isEmpty ? local.hostname : local.address
+            let localAddress = local.address.isEmpty ? local.hostname : local.address
+            record.localAddress = isUnspecified(localAddress) ? "" : localAddress
             record.localPort = local.port
 
         case let browserFlow as NEFilterBrowserFlow:
@@ -119,5 +123,15 @@ public enum FlowInspector {
     private static func strippingScope(_ address: String) -> String {
         guard let percent = address.firstIndex(of: "%") else { return address }
         return String(address[..<percent])
+    }
+
+    /// `::` and `0.0.0.0` are the *unspecified* addresses, not real endpoints.
+    ///
+    /// Observed on device: many flows — IPv6 and QUIC especially — reach `handleNewFlow` before the
+    /// destination address is known, carrying `remoteFlowEndpoint == ::` while `remoteHostname` is
+    /// already populated. Reporting `::` as an address would let it be matched against real CIDR
+    /// rules, so it is normalised to "no address" and such flows are hostname-only.
+    static func isUnspecified(_ address: String) -> Bool {
+        address == "::" || address == "0.0.0.0"
     }
 }

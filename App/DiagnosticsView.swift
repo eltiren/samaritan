@@ -154,6 +154,13 @@ struct DiagnosticsView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
 
+            TextField("Blocked host substrings (comma separated)", text: Binding(
+                get: { diagnostics.configuration.blockedHostSubstrings.joined(separator: ", ") },
+                set: { diagnostics.configuration.blockedHostSubstrings = splitList($0) }
+            ))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
             TextField("Blocked addresses (comma separated)", text: Binding(
                 get: { diagnostics.configuration.blockedAddresses.joined(separator: ", ") },
                 set: { diagnostics.configuration.blockedAddresses = splitList($0) }

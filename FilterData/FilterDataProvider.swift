@@ -15,7 +15,10 @@ import OSLog
 /// * `pauseVerdict`, `resumeFlow(_:with:)` and `updateFlow(_:using:for:)` are macOS-only. On iOS a
 ///   verdict is final at the moment it is returned; there is no "decide later".
 /// * `sourceAppAuditToken` is macOS-only. `sourceAppIdentifier` is the only app identity we get.
-final class FilterDataProvider: NEFilterDataProvider {
+/// `@unchecked Sendable`: every piece of mutable state on this class is guarded by `lock`, and the
+/// provider is handed between the system's callback queue and the utility queue the sandbox probe
+/// runs on.
+final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
 
     /// Built inside `startFilter`, not as a stored-property initialiser: a stored property is
     /// constructed before the initialiser body, so a failure there would kill the extension before
@@ -34,6 +37,8 @@ final class FilterDataProvider: NEFilterDataProvider {
     /// filter is enabled — often before you have `log stream` attached — so relying on it alone
     /// means the answer scrolls past unseen.
     private var sandboxProbeRan = false
+    private var sandboxSummary = ""
+    private var sandboxSummariesLogged = 0
 
     private var probedApps = Set<String>()
     private var probeBudget = SpikeConfiguration.default.controlProbeBudget
@@ -42,7 +47,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         // Unconditional first line. If this appears and nothing else does, the crash is below.
-        Log.data.log("★ DATA PROVIDER startFilter entered pid=\(getpid())")
+        Log.flows.log("DATA PROVIDER startFilter entered pid=\(getpid())")
 
         SandboxProbe.run()
 
@@ -51,8 +56,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         let hasStore = store != nil
         PathObserver.shared.start()
         reloadConfiguration(force: true)
-        Log.data.log("""
-            ★ DATA PROVIDER startFilter ready appGroup=\(SharedContainer.appGroupIdentifier, privacy: .public) \
+        Log.flows.log("""
+            DATA PROVIDER startFilter ready appGroup=\(SharedContainer.appGroupIdentifier, privacy: .public) \
             container=\(hasContainer, privacy: .public) ring=\(hasStore, privacy: .public)
             """)
 
@@ -161,7 +166,21 @@ final class FilterDataProvider: NEFilterDataProvider {
         lock.unlock()
         guard !alreadyRan else { return }
         // Off the hot path — this does real filesystem I/O and we only need it once.
-        DispatchQueue.global(qos: .utility).async { SandboxProbe.run() }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let summary = SandboxProbe.summary(of: SandboxProbe.run())
+            self?.lock.lock()
+            self?.sandboxSummary = summary
+            self?.lock.unlock()
+        }
+    }
+
+    /// Returns the sandbox verdict for the first few flow lines, then stops repeating it.
+    private func sandboxSuffix() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !sandboxSummary.isEmpty, sandboxSummariesLogged < 3 else { return "" }
+        sandboxSummariesLogged += 1
+        return " sandbox[\(sandboxSummary)]"
     }
 
     // MARK: - Control probe
@@ -228,7 +247,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             app=\(record.appDescription, privacy: .public) \
             ver=\(record.sourceAppVersion, privacy: .public) \
             remote=\(record.remoteDescription, privacy: .public) \
-            addr=\(record.remoteAddress, privacy: .public) \
+            addr=\(record.remoteAddress.isEmpty ? "<unresolved>" : record.remoteAddress, privacy: .public) \
             host=\(record.remoteHostname.isEmpty ? "<nil>" : record.remoteHostname, privacy: .public) \
             local=\(record.localDescription, privacy: .public) \
             \(record.socketFamilyName, privacy: .public)/\(record.socketProtocolName, privacy: .public) \
@@ -236,7 +255,7 @@ final class FilterDataProvider: NEFilterDataProvider {
             path=[\(record.pathFlags.summary, privacy: .public)] \
             rule=\(record.matchedRule.isEmpty ? "-" : record.matchedRule, privacy: .public) \
             id=\(record.flowIdentifier, privacy: .public) \
-            \(record.decisionNanos / 1000)us
+            \(record.decisionNanos / 1000)us\(self.sandboxSuffix(), privacy: .public)
             """)
     }
 

@@ -63,6 +63,13 @@ idevicesyslog -u "$UDID" -m "app=" --no-colors
 It prints `process(library)[pid] <Level>: message` rather than subsystem/category, which is why
 every Samaritan line carries its own `[APP]`/`[DATA]`/`[CTRL]` tag.
 
+**Caveat — `idevicesyslog` drops messages that Console.app shows.** From the two extensions it
+reliably delivers the `Flows` category but not `Storage` / `DataProvider` / `ControlProvider`, even
+though all of them use the same `Logger.log()` API at the same level. Cause unknown. Because of it,
+start-up lines and the sandbox probe summary are deliberately emitted on the `Flows` logger, and the
+probe verdict is also appended to the first three flow lines as `sandbox[…]`. **Use Console.app when
+you need the full picture.**
+
 All three processes link the same `Shared` code, so startup output is nearly identical between
 them. Two ways to tell them apart:
 
@@ -311,13 +318,31 @@ because *which* process iOS calls on current iOS is **[DEVICE]**.
 1. Enable the filter in the app. Confirm **State: Enabled** and **Shared container: available**.
 2. Generate traffic (open a few apps). Watch `Flows observed` climb and the flow list populate.
 3. Tap **Run drop test**. Expected with the filter enabled:
-   - `BLOCKED neverssl.com` → failure (`NSURLErrorNetworkConnectionLost` / `-1005`, or similar)
+   - `BLOCKED substr www.google.com` → failure
+   - `BLOCKED substr googleapis.com` → failure
+   - `BLOCKED suffix neverssl.com` → failure
    - `control captive.apple.com` → `HTTP 200`
 4. Disable the filter, tap **Run drop test** again — both should now succeed.
 
-`neverssl.com` is the default block target because it is plain HTTP with no HSTS and no long-lived
-connection reuse, which are the two things that most often make an iOS drop test look like a false
-negative. If `remoteHostname` turns out to be `nil` for your traffic, put a literal IP in **Blocked
+There are three rule types, matched in that order — literal address, hostname suffix, hostname
+substring:
+
+| Field | Semantics | Example |
+|---|---|---|
+| `blockedAddresses` | exact literal address | `93.184.216.34` |
+| `blockedHostSuffixes` | `host == s` or `host.hasSuffix("." + s)` | `google.com` matches `www.google.com`, **not** `googleapis.com` |
+| `blockedHostSubstrings` | `host.contains(s)` anywhere | `google` matches `googleapis.com`, `googlevideo.com`, `google.co.uk` |
+
+The current compiled-in defaults are `neverssl.com` (suffix) and **`google` (substring)**. The
+substring rule is deliberately broad and very visible: it takes out Search, YouTube, Maps, ads and
+push, so a working `.drop()` is unmistakable — and so is a non-working one.
+
+Defaults are compiled in as well as being writable from the UI, because the data provider may not be
+permitted to read `spike-config.json` at all (see the sandbox finding). A rebuild always applies;
+the UI only applies if container reads are allowed — which makes the UI path a test in itself.
+
+`neverssl.com` remains a target because it is plain HTTP with no HSTS and no long-lived connection
+reuse, which are the two things that most often make an iOS drop test look like a false negative. If `remoteHostname` turns out to be `nil` for your traffic, put a literal IP in **Blocked
 addresses** instead and repeat — the ring buffer records the address for every flow, so pick one you
 have already observed.
 
@@ -372,53 +397,57 @@ Do not start milestone 2 until this table is complete.
 | UDP / QUIC flows delivered | **✅ YES** | Safari's HTTP/3 shows as `IPv4/UDP dir=2` to `www.google.com:443`. A TCP-only policy engine would miss most modern browser traffic. |
 | Report delivery differs by process | **⚠️ asymmetric** | Control provider receives `event=1` (newFlow) *and* `event=3` (flowClosed); data provider was only seen receiving `flowClosed`. Same flow id (`B94F10F5`) across both. |
 | App can read/write the App Group container | **✅ YES** | All probes OK: create, write, read, read-only opens of both rings, private container, `getifaddrs` 45 addrs / 24 on tunnels. |
-| **Data provider can write the App Group container** | **❌ NO** | `open(flows-data.ring) failed: Operation not permitted` (EPERM) — while `FilterControl` opened its ring successfully in the same second with identical entitlements. See below. |
-| **Data provider can enumerate tunnel interfaces** | **❌ NO** | `getifaddrs` returned `tunnels=none` in `FilterData` while `FilterControl` simultaneously saw seven `ipsec*`/`utun*` addresses. |
-| `.drop()` blocks, VPN off | ☐ | not yet run |
-| Filter stays active with NordVPN connected | ☐ | |
-| `sourceAppIdentifier` still populated under VPN | ☐ | |
-| Endpoint = real destination or tunnel endpoint | ☐ | |
-| `.drop()` blocks with NordVPN connected | ☐ | **the decisive one** |
+| **Data provider can WRITE any file, anywhere** | **❌ NO** | `EPERM` on the App Group container *and* on its own private container. A blanket write denial, not an App-Group permission problem. |
+| **Data provider can READ the App Group container** | **✅ YES** | `stat`, `listContainer` (4 entries), `openRO` + `pread` on files written by other processes all succeed. **This is what makes milestone 2 possible.** |
+| **Data provider can enumerate network interfaces** | **❌ NO** | `getifaddrs` returns **0 addresses**. Not a tunnel-specific restriction — total blindness. `FilterControl` saw 47 addresses across 29 interfaces at the same moment. |
+| `.drop()` blocks, VPN off | **✅ YES** | Substring rule `google` applied; Search, YouTube, Maps and Google push all dead while enabled, restored on toggle off. |
+| `remoteHostname` available under VPN | **✅ YES** | Blocking is hostname-driven and it kept working with the tunnel up, so the filter still receives hostnames. |
+| Filter stays active with NordVPN connected | **✅ YES** | |
+| **`.drop()` blocks with NordVPN connected** | **✅ YES** | **The decisive result.** The content filter is evaluated *before* traffic reaches the packet tunnel, and drop verdicts are honoured with the tunnel up. No sign of the [FB18681313] verdict-ignored failure mode on iOS 26. |
+| **Endpoint = real destination or tunnel endpoint** | **✅ REAL DESTINATION** | With NordVPN connected: `addr=63.176.3.100` (AWS Frankfurt), `addr=23.197.161.53` (Akamai), `addr=172.217.115.4` (Google) — all genuine destinations, while `local=100.78.119.133` is NordVPN's CGNAT tunnel address. **The filter runs above encapsulation. IP/CIDR and geo-IP policy work normally under VPN.** |
+| Data provider can classify tunnel membership | **❌ NO** | `FilterData` logs `path=[wifi,other]`; `FilterControl`, same flow id, logs `path=[wifi,other,utun,in-tunnel]`. `getifaddrs` is restricted in the data provider, so `tunnelPresent`/`localIsTunnel` never fire there. **`NWPath.usesInterfaceType(.other)` does work** — that is the hot-path VPN signal. |
+| Remote address always available at `handleNewFlow` | **❌ NO** | Many flows arrive with `remoteFlowEndpoint == ::` (unspecified) while `remoteHostname` is already populated. See below — this is a hard constraint on the CIDR engine. |
+| `sourceAppIdentifier` still populated under VPN | **✅ YES** | `app=.com.apple.ctcategories.service` captured with the tunnel up. |
+| Flow's local address under VPN | **tunnel-assigned** | `local=100.78.119.133` — CGNAT range, NordVPN's address, not the LAN `192.168.0.65`. `path=[wifi,other,utun,in-tunnel]`, so `NWPath` reports `.other` **and** the `localIsTunnel` classifier fires. |
+| Remote **hostname** under VPN | **✅ real destination** | `host=itunes.apple.com` — the filter sees the app's intended host, not a VPN endpoint. |
 
-### ⚠️ The data provider is sandboxed far harder than the control provider
+### 🔑 The data provider is read-only, and blind to network interfaces
 
-Undocumented, and the most consequential finding so far. In a single run, same App Group, same
-entitlements, ~20 ms apart:
+The single most consequential finding of the spike, and undocumented anywhere. `SandboxProbe`
+measured all three processes in one run, same App Group, identical entitlements, ~50 ms apart:
 
-```
-14:44:55.875  FilterData     open(flows-data.ring) failed: Operation not permitted
-14:44:55.889  FilterData     [DATA] path ... interfaces=en0,en0,pdp_ip0 tunnels=none
-14:44:55.945  FilterControl  [CTRL] ring open: flows-control.ring slots=2048 seq=36
-14:44:55.964  FilterControl  [CTRL] path ... tunnels=ipsec1=…,ipsec4=…,utun10=…
-```
+| Capability | app | **FilterData** | FilterControl |
+|---|---|---|---|
+| `containerURL` resolves | OK | **OK** | OK |
+| `stat(container)` | OK | **OK** | OK |
+| list container | OK | **OK — 4 entries** | OK |
+| `open(O_CREAT\|O_RDWR)` | OK | **FAIL — `EPERM`** | OK |
+| `write` | OK | — | OK |
+| `openRO` another process's file | OK | **OK** | OK |
+| `pread` that file | OK | **OK** | OK |
+| write to **own private** container | OK | **FAIL — `EPERM`** | OK |
+| `getifaddrs` | 45 addrs | **FAIL — 0 addrs** | 47 addrs / 29 ifaces |
 
-`SharedContainer.containerURL` is non-`nil` in both — the container resolves, then access is denied.
-This is consistent with the privacy model the API is built around: the data provider sees *every*
-flow, so it is prevented from persisting or exfiltrating what it sees; the control provider only
-sees flows you deliberately escalate with `.needRules()`, so it is trusted with storage.
+Two clean rules for `NEFilterDataProvider` on iOS 26:
 
-It also explains Sift's shape retroactively: Sift did all of its caching and history writing in the
-**control** provider, not the data provider. That looked like a style choice in 2018. It was not.
+1. **It cannot write anywhere.** Not the App Group, not even its own `Library/Caches`. This is a
+   blanket filesystem write denial, not a missing entitlement — exactly what you would build if the
+   goal were to stop a process that sees every flow from ever persisting what it sees.
+2. **It can read the App Group container freely** — directory listing, `open(O_RDONLY)`, `pread` on
+   files written by the app or the control provider.
 
-**This has to be pinned down before milestone 2**, because the planned architecture — app compiles a
-policy blob, data provider memory-maps and reads it — depends on whether the denial is
-*write-only* or *total*. `SandboxProbe` (`Shared/Core/SandboxProbe.swift`) now runs at start-up in
-all three processes and reports, per capability, with `errno`:
+It also explains Sift retroactively: Sift did all its caching and history writing in the **control**
+provider. That looked like a style choice in 2018. It was not.
 
-- `stat` / list the container
-- create, write, read a new file
-- **open an existing file read-only** ← the one that decides milestone 2
-- `Data(contentsOf:)` the config file
-- write to the process's own private container (is the denial App-Group-specific or blanket?)
-- `getifaddrs` visibility
+**Milestone 2's architecture survives**, with one change:
 
-Consequences if reads are also denied:
-
-- Policy cannot be delivered by shared file. The remaining channels are
-  `NEFilterProviderConfiguration.vendorConfiguration` (set by the app, readable via
-  `filterConfiguration` in the provider) and `.needRules()` round trips.
-- Flow statistics from the data provider are impossible except via `OSLog`. Durable history could
-  only cover flows escalated to the control provider — which is exactly what Sift did.
+- ✅ App compiles the policy blob → writes it to the App Group → data provider `mmap`s it read-only.
+  This is precisely the read path that was measured working.
+- ❌ The data provider cannot persist statistics, counters, or flow history. `OSLog` is its only
+  output. Durable history can only cover flows escalated to the control provider — Sift's design,
+  and now clearly a forced one rather than a preference.
+- ❌ `NetworkInterfaces` is useless in the data provider. Hot-path VPN detection must come from
+  `NWPath.usesInterfaceType(.other)`, which does work there.
 
 ### ⚠️ Flows answered with `.needRules()` lose connection races
 
@@ -454,23 +483,169 @@ for.
 
 ---
 
+## Verdict on the spike
+
+**The architecture works.** A development-signed build on an ordinary unsupervised iPhone can
+configure a content filter, observe every TCP and UDP flow with app identity and hostname, and drop
+flows — including while NordVPN's `NEPacketTunnelProvider` is connected. That was the project's
+central risk and it is retired.
+
+`NEPacketTunnelProvider` was never the right tool here anyway (per WWDC25 it receives no flow or
+app-level metadata), and now it does not have to be.
+
+All six VPN coexistence questions are answered, and the sandbox boundary that decides how policy
+reaches the data provider is measured rather than assumed: **the data provider can read the App
+Group container but cannot write anywhere.** The planned design — app compiles a policy blob, data
+provider memory-maps it read-only — is viable as drawn.
+
+Milestone 1 is complete.
+
 ## Notes for milestone 2 (do not build yet)
 
-Constraints the spike has already established, which the policy engine must be designed around:
+### ⚠️ The remote address is not always available — the hostname often is
 
-- Every flow hits Swift. There is no iOS equivalent of `NEFilterSettings` to offload matching.
-- The verdict is synchronous and final; no pause-and-decide-later.
-- App identity is `sourceAppIdentifier` only — no audit token, so no code-signature validation.
-- Hostnames are unreliable. An IP/CIDR engine is the primary matcher; domains are a secondary,
-  best-effort layer.
-- The data provider is memory-limited and long-lived. The compiled policy should be an immutable,
-  memory-mapped, zero-copy structure built by the app, not a graph the extension allocates. A
-  memory-mapped patricia trie over a fixed-stride node array fits both that and the App Group
-  channel already proven here.
-- `handleRulesChanged()` is the only push into the data provider, it carries no payload, and it only
-  fires as a side effect of a `.needRules()` round trip. Policy reloads should therefore be driven
-  by a cheap file-generation check on the hot path (as `SpikeConfiguration` reloading already does)
-  rather than by relying on that callback.
+Safari's Safe Browsing traffic, dropped by the substring rule, arrived like this:
+
+```
+DROP app=.com.apple.mobilesafari remote=apple-safebrowsing.googleapis.com:443
+     addr=::  host=apple-safebrowsing.googleapis.com  local=?  IPv6/UDP  rule=substr:google  18us
+```
+
+`::` is the *unspecified* IPv6 address: the flow reached `handleNewFlow` before the destination was
+resolved. `remoteHostname` was populated anyway. The same shape appears on QUIC flows and on unbound
+sockets (`local=0.0.0.0`).
+
+Two consequences:
+
+1. **An IP-only policy engine will miss traffic.** A meaningful share of flows carry no address at
+   decision time. Domain rules are not a "secondary, best-effort layer" as originally assumed — for
+   these flows they are the *only* layer. The earlier expectation that `remoteHostname` would be
+   unreliable was wrong; on iOS 26 it is frequently the more reliable of the two.
+2. `::` and `0.0.0.0` must never be treated as addresses. `FlowInspector.isUnspecified(_:)` now
+   normalises them to "no address" so they cannot be matched against real CIDR rules, and the logs
+   print `addr=<unresolved>`.
+
+### Local-network traffic is visible, and has no hostname
+
+`rapportd` (Handoff/Continuity) flows to link-local peers appear like any other flow:
+
+```
+allow app=.com.apple.rapportd remote=fe80::3817:9cff:fe64:a43f:53458 addr=fe80::3817:9cff:fe64:a43f
+      host=<nil> local=? IPv6/TCP path=[wifi,other] 52us
+```
+
+LAN and link-local traffic is in scope for the filter, `remoteHostname` is `nil` for it, and the
+local endpoint is unavailable. A policy engine needs an explicit story for RFC1918 / `fe80::/10` /
+multicast rather than treating every flow as internet-bound.
+
+### ⚠️ `NEFilterFlow.identifier` may not be one-per-`handleNewFlow`
+
+Four `rapportd` flows to four different endpoints — three link-local IPv6 and one IPv4 — arrived
+within 9 ms all reporting the same identifier prefix:
+
+```
+15:17:35.067  needRules  remote=fe80::1cd3:1874:ba69:d5bf:52045  id=D89B5B5D
+15:17:35.069  allow      remote=fe80::3817:9cff:fe64:a43f:53458  id=D89B5B5D
+15:17:35.072  allow      remote=192.168.0.13:52045               id=D89B5B5D
+15:17:35.076  allow      remote=fe80::18f4:1ff2:b899:a8ee:53458  id=D89B5B5D
+```
+
+Resolved by logging the full UUID: the identifiers are **distinct**, but they share a long common
+prefix, so truncation collides.
+
+```
+remote=fe80::1cd3:1874:ba69:d5bf:52045   id=D89B5B5D-793C-4940-22C1-3882FC81E600
+remote=fe80::3817:9cff:fe64:a43f:53458   id=D89B5B5D-793C-4940-0CF2-6584FD81E600
+remote=192.168.0.13:52045                id=D89B5B5D-793C-4940-B94C-48833282E600
+```
+
+`NEFilterFlow.identifier` is **not** a random v4 UUID — the first three groups are stable across
+flows (and across processes). **Never truncate it.** Use the whole value as the key for
+report-to-flow correlation.
+
+### Connection racing amplifies everything
+
+One `firebaseremoteconfigrealtime.googleapis.com` lookup produced **eight** flows in 45 ms, each to a
+different Google IP (`172.217.112.4` … `172.217.119.4`), all dropped. Budget the hot path for bursts
+an order of magnitude above the "one flow per connection" intuition.
+
+### Answered: what does `addr=` contain under the tunnel?
+
+Hostname-based dropping works with the VPN up, but that does not establish whether the *address* the
+filter sees is the app's real destination or NordVPN's tunnel endpoint. The entire milestone-2 plan
+is an IPv4/IPv6 prefix engine, so this decides whether IP-based policy is meaningful under VPN at
+all:
+
+- **Real destination** → CIDR, geo-IP and feed-based policy all work normally under VPN.
+- **Tunnel endpoint** → every flow collapses to one address, IP policy is useless while connected,
+  and domain rules become the only workable layer.
+
+Capture it with the tunnel up:
+
+```sh
+# -p filters by process, which excludes the very noisy cloudd/CFNetwork lines that also
+# contain "app=". -m "app=" alone is not selective enough.
+idevicesyslog -u "$(idevice_id -l | head -1)" -p "FilterData|FilterControl" --no-colors
+```
+
+**Answer: the real destination.** With NordVPN connected, every flow showed the app's genuine remote
+address and the tunnel's local address:
+
+```
+allow app=8A5G68776P.com.enote.staging  remote=tokens.prod.enote.com:443  addr=63.176.3.100
+      local=100.78.119.133:53831  IPv4/TCP  path=[wifi,other]  43us
+```
+
+`63.176.3.100` is AWS Frankfurt — the real destination. `100.78.119.133` is CGNAT, NordVPN's
+tunnel address. So milestone 2's prefix engine is viable under VPN.
+
+Supporting evidence from the control provider on the same flow id:
+
+```
+CONTROL ctl-allow app=.com.apple.ctcategories.service remote=itunes.apple.com:443
+        host=itunes.apple.com local=100.78.119.133:53764
+        path=[wifi,other,utun,in-tunnel] id=9BE80D75 171us
+```
+
+```
+FilterData     … local=100.78.119.133:53831 path=[wifi,other]                   id=42D009A9
+FilterControl  … local=100.78.119.133:53831 path=[wifi,other,utun,in-tunnel]    id=42D009A9
+```
+
+Same flow, two processes, different visibility: only the control provider can enumerate the tunnel
+interface. Both see `.other` from `NWPath`, which is therefore the only tunnel signal usable on the
+hot path.
+
+### Constraints the spike established, which the policy engine must be designed around
+
+**Delivery of policy**
+
+- The app compiles the blob; the data provider `mmap`s it **read-only**. Measured working.
+- The data provider can write **nothing**, so the blob must be complete and self-describing — no
+  scratch files, no lazily built indexes, no on-device compaction.
+- `handleRulesChanged()` is the only push into the data provider, carries no payload, and only fires
+  as a side effect of a `.needRules()` round trip. Reload should be driven by a cheap throttled
+  `stat(2)` generation check on the hot path, as `SpikeConfiguration` reloading already does.
+
+**Matching**
+
+- Every flow hits Swift; there is no iOS equivalent of `NEFilterSettings` to offload matching, and
+  the verdict is synchronous and final.
+- Budget for bursts: one hostname produced **eight** flows in 45 ms across eight IPs.
+- **Domains are a first-class matcher, not a fallback.** A meaningful share of flows arrive with
+  `remoteFlowEndpoint == ::` and only a hostname. An IP-only engine silently misses them.
+- Conversely, LAN and link-local flows arrive with a hostname of `nil`. The engine needs explicit
+  handling for RFC1918 / `fe80::/10` / multicast rather than assuming internet-bound traffic.
+- App identity is `<teamID>.<bundleID>` and nothing else — no audit token, so no code-signature
+  validation. Split on the first `.`; Apple's own apps have an empty team.
+- `NEFilterFlow.identifier` shares a long common prefix across flows. Use the full UUID as a key.
+
+**Observability**
+
+- The data provider cannot persist anything. Counters, history and statistics must either go through
+  `OSLog` or be limited to flows escalated to the control provider.
+- `.needRules()` costs ~3–14 ms round trip and loses connection races. Out-of-band signalling only.
+- Hot-path VPN detection is `NWPath.usesInterfaceType(.other)`. `getifaddrs` returns nothing.
 
 ## References
 

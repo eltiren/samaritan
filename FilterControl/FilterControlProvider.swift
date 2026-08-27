@@ -27,12 +27,12 @@ final class FilterControlProvider: NEFilterControlProvider {
     private var sandboxProbeRan = false
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
-        Log.control.log("★ CONTROL PROVIDER startFilter entered pid=\(getpid())")
+        Log.flows.log("CONTROL PROVIDER startFilter entered pid=\(getpid())")
         SandboxProbe.run()
         store = DiagnosticsStore(writer: .controlProvider)
         PathObserver.shared.start()
-        Log.control.log("""
-            ★ CONTROL PROVIDER startFilter ready container=\(SharedContainer.containerURL != nil, privacy: .public) \
+        Log.flows.log("""
+            CONTROL PROVIDER startFilter ready container=\(SharedContainer.containerURL != nil, privacy: .public) \
             ring=\(self.store != nil, privacy: .public)
             """)
         store?.increment([.filterStarts: 1])
@@ -81,6 +81,7 @@ final class FilterControlProvider: NEFilterControlProvider {
             CONTROL \(record.verdict.label, privacy: .public) \
             app=\(record.appDescription, privacy: .public) \
             remote=\(record.remoteDescription, privacy: .public) \
+            addr=\(record.remoteAddress.isEmpty ? "<unresolved>" : record.remoteAddress, privacy: .public) \
             host=\(record.remoteHostname.isEmpty ? "<nil>" : record.remoteHostname, privacy: .public) \
             local=\(record.localDescription, privacy: .public) \
             path=[\(record.pathFlags.summary, privacy: .public)] \

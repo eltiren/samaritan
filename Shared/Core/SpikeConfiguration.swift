@@ -12,6 +12,11 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
     /// Blocked if the flow's hostname equals one of these or ends in `"." + suffix`.
     public var blockedHostSuffixes: [String]
 
+    /// Blocked if the hostname *contains* any of these, anywhere. Broader than
+    /// `blockedHostSuffixes`: `"google"` catches `googleapis.com` and `googlevideo.com`, which a
+    /// suffix rule on `google.com` would miss.
+    public var blockedHostSubstrings: [String]
+
     /// Blocked on exact literal-address match. Use this when `remoteHostname` turns out to be
     /// `nil` on device — which is common for flows that were resolved before the filter saw them.
     public var blockedAddresses: [String]
@@ -35,6 +40,10 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         // cleanest reliable drop test on iOS: a browser cannot silently satisfy the request from
         // a cached TLS connection or an HSTS upgrade.
         blockedHostSuffixes: ["neverssl.com"],
+        // Current on-device test target. Deliberately broad and very visible — it takes out Search,
+        // YouTube, Maps, ads and push. Compiled in as a default (not only written to the shared
+        // container) because the data provider may not be permitted to read that file at all.
+        blockedHostSubstrings: ["google"],
         blockedAddresses: [],
         controlProbeEnabled: true,
         controlProbeBudget: 32,
@@ -43,17 +52,31 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
     )
 
     public init(blockedHostSuffixes: [String],
+                blockedHostSubstrings: [String] = [],
                 blockedAddresses: [String],
                 controlProbeEnabled: Bool,
                 controlProbeBudget: Int,
                 requestReports: Bool,
                 logEveryFlow: Bool) {
         self.blockedHostSuffixes = blockedHostSuffixes
+        self.blockedHostSubstrings = blockedHostSubstrings
         self.blockedAddresses = blockedAddresses
         self.controlProbeEnabled = controlProbeEnabled
         self.controlProbeBudget = controlProbeBudget
         self.requestReports = requestReports
         self.logEveryFlow = logEveryFlow
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockedHostSuffixes = try container.decode([String].self, forKey: .blockedHostSuffixes)
+        // Absent in configs written before substring rules existed.
+        blockedHostSubstrings = try container.decodeIfPresent([String].self, forKey: .blockedHostSubstrings) ?? []
+        blockedAddresses = try container.decode([String].self, forKey: .blockedAddresses)
+        controlProbeEnabled = try container.decode(Bool.self, forKey: .controlProbeEnabled)
+        controlProbeBudget = try container.decode(Int.self, forKey: .controlProbeBudget)
+        requestReports = try container.decode(Bool.self, forKey: .requestReports)
+        logEveryFlow = try container.decode(Bool.self, forKey: .logEveryFlow)
     }
 
     // MARK: - Persistence
@@ -85,10 +108,14 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
 public struct SpikeRuleSet: Sendable {
 
     private let hostSuffixes: [String]
+    private let hostSubstrings: [String]
     private let addresses: Set<String>
 
     public init(configuration: SpikeConfiguration) {
         hostSuffixes = configuration.blockedHostSuffixes
+            .map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        hostSubstrings = configuration.blockedHostSubstrings
             .map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         addresses = Set(configuration.blockedAddresses
@@ -106,8 +133,11 @@ public struct SpikeRuleSet: Sendable {
         for suffix in hostSuffixes where host == suffix || host.hasSuffix("." + suffix) {
             return "host:\(suffix)"
         }
+        for needle in hostSubstrings where host.contains(needle) {
+            return "substr:\(needle)"
+        }
         return nil
     }
 
-    public var isEmpty: Bool { hostSuffixes.isEmpty && addresses.isEmpty }
+    public var isEmpty: Bool { hostSuffixes.isEmpty && hostSubstrings.isEmpty && addresses.isEmpty }
 }

@@ -100,6 +100,9 @@ targets:
     sources:
       - path: Tests/SamaritanTests
       - path: Shared/Core
+      # Shared/Filtering imports NetworkExtension, which is fine in a unit-test bundle running in
+      # the simulator; the pure-Swift boundary that matters is Shared/Core, which must not.
+      - path: Shared/Filtering
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_PREFIX).Tests
