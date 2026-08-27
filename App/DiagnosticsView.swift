@@ -15,6 +15,7 @@ struct DiagnosticsView: View {
             List {
                 // `.listRowBackground` has to be attached per Section — applied to the List it
                 // never reaches rows nested inside one, which left every row on the system fill.
+                appsLink.icebergRows()
                 statusSection.icebergRows()
                 policySection.icebergRows()
                 vpnSection.icebergRows()
@@ -69,6 +70,16 @@ struct DiagnosticsView: View {
                     .font(.footnote)
                     .foregroundStyle(Theme.deny)
                     .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var appsLink: some View {
+        Section {
+            NavigationLink {
+                AppListView(diagnostics: diagnostics, policy: policy)
+            } label: {
+                Label("Apps", systemImage: "square.grid.2x2")
             }
         }
     }
@@ -265,7 +276,7 @@ struct DiagnosticsView: View {
     }
 }
 
-private extension View {
+extension View {
     func icebergRows() -> some View {
         listRowBackground(Theme.surface)
             .listRowSeparatorTint(Theme.textSecondary.opacity(0.3))

@@ -387,11 +387,30 @@ Two findings from the same run:
   generator now writes its own conclusion to `OSLog` as `STRESSRESULT … verdict=PASS|LEAK|INVALID`,
   so evidence and conclusion live in the same capture.
 
-Remaining risk: [VERIFY]
+### 5.4 Sustained load
 
-- **Volume over time.** This measured a 40-flow burst, not sustained load. Reports arrive at roughly
-  twice the flow rate, and under permanent deny apps retry indefinitely, so the recorder still needs
-  coalescing and a bounded store rather than one file append per event.
+Measured again with the engine live and a real app under permanent deny — Slack, blocked by its
+blanket default, retrying for several minutes:
+
+```
+escalated by data provider : 2116
+reached control provider   : 2116
+never arrived              : 0
+control returned a drop    : 2116
+
+data -> control round trip (ms)   min 0.74   p50 1.58   p95 3.69   max 13.26
+control provider own work (ms)    min 0.05   p50 0.13   p95 0.51   max  3.76
+```
+
+Escalation holds under sustained load, not just a burst. Latency is unchanged from the 40-flow
+measurement, so the control provider is not accumulating a backlog.
+
+**But 1839 of those were one app retrying one blocked destination**, and paying a cross-process round
+trip for each is wasted work. The Observed list only needs a destination recorded once. The data
+provider therefore keeps a bounded in-memory ledger of `(app, host)` pairs it has already escalated
+and drops repeats inline — it cannot persist the ledger, but it does not need to: losing it on
+restart costs one extra escalation per pair. The ledger is cleared whenever the policy generation
+changes, so a rule edit re-records what it affects.
 
 ### 5.1 The Observed list ("sandbox")
 

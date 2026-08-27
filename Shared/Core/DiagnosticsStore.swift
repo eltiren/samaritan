@@ -36,6 +36,7 @@ public final class DiagnosticsStore {
         case controlDropsIssued
         case policyDecisions
         case spikeFallbackDecisions
+        case escalationsSuppressed
     }
 
     public struct Snapshot: Sendable {

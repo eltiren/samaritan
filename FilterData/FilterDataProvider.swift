@@ -45,6 +45,14 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     private var sandboxSummary = ""
     private var sandboxSummariesLogged = 0
 
+    /// Destinations already escalated, so a retry storm does not pay a cross-process round trip per
+    /// attempt. Measured: one blocked app produced 1839 escalations for a handful of destinations.
+    ///
+    /// In-memory only — the data provider cannot persist anything — which is fine: losing it costs
+    /// one extra escalation per pair after a restart.
+    private var escalationLedger = Set<Int>()
+    private var ledgerGeneration: UInt64 = 0
+
     private var probedApps = Set<String>()
     private var probeBudget = SpikeConfiguration.default.controlProbeBudget
 
@@ -203,9 +211,19 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
                                             address: address, now: now) {
                 counters[.policyDecisions] = 1
                 guard result.verdict.action == .deny else { return .allow }
-                return configuration.denyMode == .escalate
-                    ? .denyEscalated(rule: result.label)
-                    : .denyInline(rule: result.label)
+                guard configuration.denyMode == .escalate else {
+                    return .denyInline(rule: result.label)
+                }
+                // Escalate the first time this destination is denied for this app; drop repeats
+                // inline. Recording it once is all the Observed list needs.
+                guard shouldEscalate(app: record.sourceApp,
+                                     destination: record.remoteHostname.isEmpty
+                                        ? record.remoteAddress : record.remoteHostname,
+                                     generation: policy.currentGeneration ?? 0) else {
+                    counters[.escalationsSuppressed] = 1
+                    return .denyInline(rule: result.label)
+                }
+                return .denyEscalated(rule: result.label)
             }
         }
         counters[.spikeFallbackDecisions] = 1
@@ -213,6 +231,24 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
                                       address: record.remoteAddress,
                                       rules: rules,
                                       denyMode: configuration.denyMode)
+    }
+
+    /// Bounded, and reset whenever the policy changes so a rule edit re-records what it affects.
+    private func shouldEscalate(app: String, destination: String, generation: UInt64) -> Bool {
+        var hasher = Hasher()
+        hasher.combine(app)
+        hasher.combine(destination)
+        let key = hasher.finalize()
+
+        lock.lock()
+        defer { lock.unlock() }
+        if generation != ledgerGeneration {
+            ledgerGeneration = generation
+            escalationLedger.removeAll(keepingCapacity: true)
+        }
+        // Cap so a pathological app cannot grow this without bound in a memory-limited extension.
+        if escalationLedger.count >= 4096 { escalationLedger.removeAll(keepingCapacity: true) }
+        return escalationLedger.insert(key).inserted
     }
 
     // MARK: - Sandbox probe
