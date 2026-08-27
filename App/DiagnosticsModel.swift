@@ -110,10 +110,9 @@ final class DiagnosticsModel {
         probeResults = ["running…"]
         var results: [String] = []
         let targets: [(label: String, url: String)] = [
-            ("BLOCKED substr", "https://www.google.com/generate_204"),
-            ("BLOCKED substr", "https://googleapis.com/"),
             ("BLOCKED suffix", "http://neverssl.com/"),
-            ("control      ", "http://captive.apple.com/hotspot-detect.html"),
+            ("control       ", "http://captive.apple.com/hotspot-detect.html"),
+            ("control       ", "https://www.google.com/generate_204"),
         ]
         for target in targets {
             guard let url = URL(string: target.url) else { continue }

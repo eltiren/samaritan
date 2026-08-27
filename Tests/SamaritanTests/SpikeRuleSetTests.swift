@@ -60,11 +60,21 @@ struct SpikeRuleSetTests {
         #expect(rules(hosts: ["example.com"]).matchLabel(hostname: "", address: "") == nil)
     }
 
-    @Test("the default configuration blocks its documented test host")
+    @Test("the default configuration blocks only its documented test host")
     func defaultConfiguration() {
         let ruleSet = SpikeRuleSet(configuration: .default)
         #expect(ruleSet.matchLabel(hostname: "neverssl.com", address: "") != nil)
         #expect(ruleSet.matchLabel(hostname: "apple.com", address: "") == nil)
+        // The broad `google` substring rule was a one-off milestone-1 experiment. Leaving it on by
+        // default would break Search, YouTube and every Firebase-backed app.
+        #expect(ruleSet.matchLabel(hostname: "www.google.com", address: "") == nil)
+        #expect(ruleSet.matchLabel(hostname: "firebaseremoteconfigrealtime.googleapis.com", address: "") == nil)
+    }
+
+    @Test("the needRules probe is off by default")
+    func probeDisabledByDefault() {
+        // ~13 ms round trip that loses QUIC connection races; measured, not needed at rest.
+        #expect(!SpikeConfiguration.default.controlProbeEnabled)
     }
 
     @Test("substring rules catch what suffix rules miss", arguments: [
@@ -123,8 +133,16 @@ struct UnspecifiedAddressTests {
 
     @Test("a hostname-only flow is still matched by hostname rules")
     func hostnameOnlyStillMatches() {
-        let rules = SpikeRuleSet(configuration: .default)
+        // Built explicitly rather than from `.default`, which is a shipping choice that changes.
         // This is exactly the shape of the dropped Safe Browsing flows: no address, host present.
+        let rules = SpikeRuleSet(configuration: SpikeConfiguration(
+            blockedHostSuffixes: [],
+            blockedHostSubstrings: ["google"],
+            blockedAddresses: [],
+            controlProbeEnabled: false,
+            controlProbeBudget: 0,
+            requestReports: false,
+            logEveryFlow: false))
         #expect(rules.matchLabel(hostname: "apple-safebrowsing.googleapis.com", address: "") == "substr:google")
     }
 }

@@ -23,6 +23,10 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
 
     /// When true the data provider answers `.needRules()` for the first flow of each newly-seen
     /// `sourceAppIdentifier`, to measure whether and how the control provider is invoked.
+    ///
+    /// Off by default now that the measurement is done: the round trip costs ~13 ms and loses
+    /// connection races against QUIC siblings, so it delays the first flow of every app for no
+    /// benefit. Turn it back on from the UI to re-run the experiment.
     public var controlProbeEnabled: Bool
 
     /// Hard cap on `.needRules()` answers so a misbehaving control provider can never wedge
@@ -40,12 +44,12 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         // cleanest reliable drop test on iOS: a browser cannot silently satisfy the request from
         // a cached TLS connection or an HSTS upgrade.
         blockedHostSuffixes: ["neverssl.com"],
-        // Current on-device test target. Deliberately broad and very visible — it takes out Search,
-        // YouTube, Maps, ads and push. Compiled in as a default (not only written to the shared
-        // container) because the data provider may not be permitted to read that file at all.
-        blockedHostSubstrings: ["google"],
+        // Empty by default. `["google"]` was the milestone-1 drop test: broad and unmistakable, but
+        // it takes out Search, YouTube, Maps, ads and anything using Firebase, so it is not a sane
+        // resting state. Set it from the UI, or here, when you want that test again.
+        blockedHostSubstrings: [],
         blockedAddresses: [],
-        controlProbeEnabled: true,
+        controlProbeEnabled: false,
         controlProbeBudget: 32,
         requestReports: true,
         logEveryFlow: true

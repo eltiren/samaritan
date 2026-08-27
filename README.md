@@ -318,10 +318,9 @@ because *which* process iOS calls on current iOS is **[DEVICE]**.
 1. Enable the filter in the app. Confirm **State: Enabled** and **Shared container: available**.
 2. Generate traffic (open a few apps). Watch `Flows observed` climb and the flow list populate.
 3. Tap **Run drop test**. Expected with the filter enabled:
-   - `BLOCKED substr www.google.com` → failure
-   - `BLOCKED substr googleapis.com` → failure
    - `BLOCKED suffix neverssl.com` → failure
    - `control captive.apple.com` → `HTTP 200`
+   - `control www.google.com` → `HTTP 204`
 4. Disable the filter, tap **Run drop test** again — both should now succeed.
 
 There are three rule types, matched in that order — literal address, hostname suffix, hostname
@@ -333,9 +332,15 @@ substring:
 | `blockedHostSuffixes` | `host == s` or `host.hasSuffix("." + s)` | `google.com` matches `www.google.com`, **not** `googleapis.com` |
 | `blockedHostSubstrings` | `host.contains(s)` anywhere | `google` matches `googleapis.com`, `googlevideo.com`, `google.co.uk` |
 
-The current compiled-in defaults are `neverssl.com` (suffix) and **`google` (substring)**. The
-substring rule is deliberately broad and very visible: it takes out Search, YouTube, Maps, ads and
-push, so a working `.drop()` is unmistakable — and so is a non-working one.
+The only compiled-in default is `neverssl.com` (suffix). `blockedHostSubstrings` ships empty.
+
+`["google"]` was the milestone-1 drop test — deliberately broad and unmistakable, taking out Search,
+YouTube, Maps, ads and every Firebase-backed app. It proved `.drop()` works, including under VPN,
+and is not a sane resting state. Put it back from the UI, or in `SpikeConfiguration.default`, to
+re-run that test.
+
+The `.needRules()` probe also ships **off**. It cost ~13 ms on the first flow of every app and lost
+connection races; the measurement is done. Toggle it on from the UI to re-run it.
 
 Defaults are compiled in as well as being writable from the UI, because the data provider may not be
 permitted to read `spike-config.json` at all (see the sandbox finding). A rebuild always applies;
