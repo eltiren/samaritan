@@ -16,8 +16,33 @@ final class DiagnosticsModel {
     private(set) var perWriter: [SharedContainer.Writer: DiagnosticsStore.Snapshot] = [:]
     private(set) var interfaces: [NetworkInterfaces.Interface] = []
     private(set) var containerAvailable = SharedContainer.containerURL != nil
-    var configuration = SpikeConfiguration.load()
+    var configuration = SpikeConfiguration.load() {
+        didSet {
+            // Toggles and the deny-mode picker are discrete, unambiguous actions, so they persist
+            // the moment they change; leaving them pending behind an Apply button is what caused a
+            // whole device run to be spent measuring the default configuration.
+            //
+            // Text fields deliberately still need Apply. Saving them per keystroke would push
+            // half-typed values to the providers, and a partial *substring* rule such as "g"
+            // matches almost every hostname.
+            guard configuration.denyMode != oldValue.denyMode
+                    || configuration.controlProbeEnabled != oldValue.controlProbeEnabled
+                    || configuration.requestReports != oldValue.requestReports
+                    || configuration.logEveryFlow != oldValue.logEveryFlow
+            else { return }
+            saveConfiguration()
+        }
+    }
     private(set) var configurationError: String?
+
+    /// When the providers' configuration file was last written, or `nil` if it does not exist.
+    /// `nil` means both providers are running on compiled-in defaults regardless of what the UI shows.
+    var configurationWrittenAt: Date? {
+        guard let url = SharedContainer.configurationURL,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        else { return nil }
+        return attributes[.modificationDate] as? Date
+    }
 
     /// Result of the built-in traffic generator, so the drop test can be run without leaving the app.
     private(set) var probeResults: [String] = []
@@ -88,6 +113,7 @@ final class DiagnosticsModel {
     func saveConfiguration() {
         do {
             try configuration.save()
+            Log.app.log("configuration written deny=\(self.configuration.denyMode.rawValue, privacy: .public)")
             configurationError = nil
             Log.app.log("configuration saved")
         } catch {

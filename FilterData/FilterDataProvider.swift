@@ -260,7 +260,10 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         Log.data.log("""
             configuration hosts=\(loaded.blockedHostSuffixes.joined(separator: ","), privacy: .public) \
             addrs=\(loaded.blockedAddresses.joined(separator: ","), privacy: .public) \
-            probe=\(loaded.controlProbeEnabled, privacy: .public) reports=\(loaded.requestReports, privacy: .public)
+            probe=\(loaded.controlProbeEnabled, privacy: .public) \
+            reports=\(loaded.requestReports, privacy: .public) \
+            deny=\(loaded.denyMode.rawValue, privacy: .public) \
+            source=\(mtime > 0 ? "file" : "compiled-in-default", privacy: .public)
             """)
     }
 

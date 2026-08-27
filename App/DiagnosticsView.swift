@@ -183,14 +183,24 @@ struct DiagnosticsView: View {
             Button("Apply") { diagnostics.saveConfiguration() }
             Button("Restore defaults") { diagnostics.resetConfiguration() }
 
+            LabeledContent("Config file") {
+                if let written = diagnostics.configurationWrittenAt {
+                    Text(written, format: .dateTime.hour().minute().second())
+                } else {
+                    Text("NOT WRITTEN").foregroundStyle(Color.orange)
+                }
+            }
+
             if let error = diagnostics.configurationError {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
         } header: {
             Text("Spike configuration")
         } footer: {
-            Text("Written to the App Group container. The data provider re-reads it within a couple "
-                 + "of seconds — no need to toggle the filter.")
+            Text("Toggles and the deny-mode picker save immediately. Text fields need Apply, because "
+                 + "saving per keystroke would push half-typed rules to the providers. Until the "
+                 + "config file exists, both providers run on compiled-in defaults — check the "
+                 + "device log for `source=compiled-in-default`.")
         }
     }
 
