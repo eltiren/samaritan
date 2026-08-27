@@ -348,17 +348,45 @@ Pass conditions:
 - `never arrived` is zero. Anything else means escalation is lossy under load, deny has to be
   decided inline, and recording falls back to `NEFilterReport` only.
 
-Remaining risks: [VERIFY]
+### 5.3 Measured results
 
-- **Volume.** Reports arrive at roughly twice the flow rate (`newFlow` and `flowClosed`), and one
-  hostname was observed producing eight flows in 45 ms. Under permanent deny, apps retry
-  indefinitely, so the recorder needs coalescing and a bounded store — not one file append per
-  event.
-- **Does `.needRules()` → `.drop()` actually drop?** Milestone 1 only exercised control verdicts of
-  `allow`. The drop path through the control provider is untested.
-- **Cost of escalating every denied flow.** With third-party apps fully blocked and retrying, this
-  is the common case, not the rare one. If the control provider cannot keep up, the data provider
-  must fall back to deciding `.drop()` inline and accepting report-only recording.
+40 concurrent requests at a denied host, `denyMode = escalate`, on device:
+
+```
+escalated by data provider : 41
+reached control provider   : 41
+never arrived              : 0
+control returned a drop    : 41
+
+data -> control round trip (ms)
+  min    0.92   p50    1.36   p95    5.20   max   28.16
+control provider own work (ms)
+  min    0.06   p50    0.09   p95    0.27   max    1.11
+```
+
+- **Escalation is not lossy at this rate.** 41 of 41 arrived. The control provider kept up with 40
+  simultaneous round trips.
+- **The round trip is far cheaper than milestone 1 suggested.** The ~13 ms figure was a cold start
+  including process launch; warm, the median is **1.36 ms** and the control provider's own work is
+  **90 µs**. The 28 ms maximum is the first escalation of the run.
+- Every escalated flow was answered `ctl-DROP`, and no `neverssl` flow was ever allowed or
+  inline-dropped — all 41 took the `needRules` path.
+
+Two findings from the same run:
+
+- **Escalated flows produce no `NEFilterReport`.** `NEFilterControlVerdict` inherits `shouldReport`
+  but nothing sets it, so no `flowClosed` event and no byte counts arrive for an escalated flow.
+  Harmless for denial — a dropped flow moves no bytes — but it means the report channel cannot be
+  used to confirm a drop actually happened.
+- Because of that, the log alone proves 41 *verdicts* were issued, not 41 *failed connections*. The
+  generator now writes its own conclusion to `OSLog` as `STRESSRESULT … verdict=PASS|LEAK|INVALID`,
+  so evidence and conclusion live in the same capture.
+
+Remaining risk: [VERIFY]
+
+- **Volume over time.** This measured a 40-flow burst, not sustained load. Reports arrive at roughly
+  twice the flow rate, and under permanent deny apps retry indefinitely, so the recorder still needs
+  coalescing and a bounded store rather than one file append per event.
 
 ### 5.1 The Observed list ("sandbox")
 

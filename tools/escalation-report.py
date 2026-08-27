@@ -24,6 +24,8 @@ from collections import OrderedDict
 ESCALATE = re.compile(r"ESCALATE id=(\S+) t=(\d+) app=(\S+) host=(\S+) rule=(\S+)")
 RECV = re.compile(r"CTLRECV id=(\S+) t=(\d+)")
 DONE = re.compile(r"CTLDONE id=(\S+) t=(\d+) verdict=(\S+)")
+STRESS = re.compile(r"STRESSRESULT host=(\S+) count=(\d+) blocked=(\d+) reached=(\d+) "
+                    r"inconclusive=(\d+) verdict=(\S+)")
 
 
 def percentile(values, fraction):
@@ -37,6 +39,7 @@ def percentile(values, fraction):
 def main(path):
     escalated = OrderedDict()
     received, done = {}, {}
+    stress = []
 
     with open(path, "r", errors="replace") as handle:
         for line in handle:
@@ -49,6 +52,8 @@ def main(path):
                 received[m.group(1)] = int(m.group(2))
             elif (m := DONE.search(line)):
                 done[m.group(1)] = (int(m.group(2)), m.group(3))
+            elif (m := STRESS.search(line)):
+                stress.append(m.groups())
 
     if not escalated:
         print("No ESCALATE lines found.")
@@ -61,6 +66,17 @@ def main(path):
 
     round_trips = [(received[f] - escalated[f]["t"]) / 1e6 for f in arrived]
     control_work = [(done[f][0] - received[f]) / 1e6 for f in arrived if f in done]
+
+    if stress:
+        print("app-side result — did the connections actually fail?")
+        for host, count, blocked, reached, inconclusive, verdict in stress:
+            print(f"  {verdict:8} {host}  {count} requests: "
+                  f"{blocked} blocked, {reached} reached, {inconclusive} inconclusive")
+        print()
+    else:
+        print("no STRESSRESULT line in this log — the app's own conclusion is missing, so drop")
+        print("verdicts below are not proof that the connections failed.")
+        print()
 
     print(f"escalated by data provider : {len(escalated)}")
     print(f"reached control provider   : {len(arrived)}")
@@ -88,7 +104,15 @@ def main(path):
             print(f"  … and {len(missing) - 10} more")
 
     print()
-    if missing:
+    leaked = any(v == "LEAK" for *_, v in stress)
+    invalid = any(v == "INVALID" for *_, v in stress)
+    if invalid:
+        print("VERDICT: inconclusive. Some requests never reached the wire, so the filter was")
+        print("         not exercised. Fix the generator before trusting any of this.")
+    elif leaked:
+        print("VERDICT: a control-provider .drop() did NOT drop the flow. Section 5 of")
+        print("         docs/firewall-rules.md cannot rely on escalation for denial.")
+    elif missing:
         print("VERDICT: escalation is lossy. Deny must be decided inline; recording has to fall")
         print("         back to NEFilterReport only. See docs/firewall-rules.md section 5.")
     elif len(dropped) < len(arrived):

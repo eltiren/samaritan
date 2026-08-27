@@ -155,6 +155,10 @@ final class DiagnosticsModel {
                 outcome = ProbeOutcome.classify(error)
             }
             results.append("\(target.label) \(url.host ?? "") → \(outcome.label), \(Self.ms(since: started))")
+            Log.app.log("""
+                PROBERESULT target=\(target.label.trimmingCharacters(in: .whitespaces), privacy: .public) \
+                host=\(url.host ?? "?", privacy: .public) outcome=\(outcome.label, privacy: .public)
+                """)
         }
         probeResults = results
     }
@@ -217,6 +221,15 @@ final class DiagnosticsModel {
         }
         lines.append("control handled: \(snapshot[.controlFlowsHandled]), drops issued: \(snapshot[.controlDropsIssued])")
         probeResults = lines
+
+        // Also to OSLog: the harness's own conclusion belongs in the same capture as the evidence,
+        // otherwise the log proves 41 drop verdicts were issued but not that 41 connections failed.
+        let verdict = inconclusive > 0 ? "INVALID" : (reached > 0 ? "LEAK" : "PASS")
+        Log.app.log("""
+            STRESSRESULT host=\(host, privacy: .public) count=\(count) \
+            blocked=\(blocked) reached=\(reached) inconclusive=\(inconclusive) \
+            verdict=\(verdict, privacy: .public)
+            """)
         refresh()
     }
 
