@@ -4,6 +4,7 @@ import SwiftUI
 struct SamaritanApp: App {
     @State private var filter = FilterController()
     @State private var diagnostics = DiagnosticsModel()
+    @State private var policy = PolicyStore()
 
     init() {
         Theme.applyGlobalAppearance()
@@ -11,7 +12,7 @@ struct SamaritanApp: App {
 
     var body: some Scene {
         WindowGroup {
-            DiagnosticsView(filter: filter, diagnostics: diagnostics)
+            DiagnosticsView(filter: filter, diagnostics: diagnostics, policy: policy)
                 .tint(Theme.accent)
                 .task {
                     SandboxProbe.run()

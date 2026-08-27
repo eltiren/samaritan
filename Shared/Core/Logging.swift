@@ -30,4 +30,5 @@ public enum Log {
     public static let flows = Logger(subsystem: subsystem, category: "Flows")
     public static let storage = Logger(subsystem: subsystem, category: "Storage")
     public static let path = Logger(subsystem: subsystem, category: "Path")
+    public static let policy = Logger(subsystem: subsystem, category: "Flows")   // shares the Flows category, which is the one idevicesyslog reliably delivers
 }

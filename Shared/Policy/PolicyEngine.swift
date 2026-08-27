@@ -23,10 +23,10 @@ public struct PolicyEngine: Sendable {
         public var isAllowed: Bool { action == .allow }
     }
 
-    public let policy: CompiledPolicy
+    public let policy: PolicyView
 
-    public init(policy: CompiledPolicy) {
-        self.policy = policy
+    public init(view: PolicyView) {
+        self.policy = view
     }
 
     /// Resolves one flow.

@@ -24,8 +24,11 @@ public enum PolicyCompiler {
         }
 
         func addLabel(_ rule: PolicyRule) -> UInt32 {
-            policy.ruleLabels.append("\(rule.action.label):\(rule.displayValue)")
-            return UInt32(policy.ruleLabels.count - 1)
+            // Labels are interned like every other name, so the blob has one string table and no
+            // section needs a different reader.
+            let text = intern("\(rule.action.label):\(rule.displayValue)")
+            policy.labels.append(.init(offset: text.offset, length: text.length))
+            return UInt32(policy.labels.count - 1)
         }
 
         /// Builds one rule set. Conflicts are resolved here rather than at match time: for a given

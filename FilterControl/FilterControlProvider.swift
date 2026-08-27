@@ -20,6 +20,7 @@ import OSLog
 final class FilterControlProvider: NEFilterControlProvider {
 
     private var store: DiagnosticsStore?
+    private var policy: PolicySource?
     private let lock = NSLock()
     /// Flip `updateRules` exactly once so the data provider's `handleRulesChanged()` can be
     /// observed without a rules-change storm.
@@ -30,6 +31,9 @@ final class FilterControlProvider: NEFilterControlProvider {
         Log.flows.log("CONTROL PROVIDER startFilter entered pid=\(getpid())")
         SandboxProbe.run()
         store = DiagnosticsStore(writer: .controlProvider)
+        if let policyPath = SharedContainer.policyURL?.path {
+            policy = PolicySource(path: policyPath)
+        }
         PathObserver.shared.start()
         Log.flows.log("""
             CONTROL PROVIDER startFilter ready container=\(SharedContainer.containerURL != nil, privacy: .public) \
@@ -66,7 +70,20 @@ final class FilterControlProvider: NEFilterControlProvider {
         let verdict: NEFilterControlVerdict
         var counters: [DiagnosticsStore.Counter: UInt64] = [.controlFlowsHandled: 1]
 
-        if let label = rules.matchLabel(hostname: record.remoteHostname, address: record.remoteAddress) {
+        // When a policy is loaded it decides outright — allow included. Falling through to the
+        // spike rules on an explicit allow would let a stale test rule override real policy.
+        let denialLabel: String?
+        if let policy,
+           let result = policy.evaluate(appID: record.sourceApp,
+                                        hostname: record.remoteHostname.isEmpty ? nil : record.remoteHostname,
+                                        address: record.remoteAddress.isEmpty ? nil : IPPrefix(record.remoteAddress),
+                                        now: started) {
+            denialLabel = result.verdict.action == .deny ? result.label : nil
+        } else {
+            denialLabel = rules.matchLabel(hostname: record.remoteHostname, address: record.remoteAddress)
+        }
+
+        if let label = denialLabel {
             record.verdict = .controlDrop
             record.matchedRule = label
             counters[.flowsDropped] = 1

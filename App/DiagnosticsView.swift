@@ -6,6 +6,7 @@ import UIKit
 struct DiagnosticsView: View {
     @Bindable var filter: FilterController
     @Bindable var diagnostics: DiagnosticsModel
+    @Bindable var policy: PolicyStore
 
     @State private var showingExport = false
 
@@ -15,6 +16,7 @@ struct DiagnosticsView: View {
                 // `.listRowBackground` has to be attached per Section — applied to the List it
                 // never reaches rows nested inside one, which left every row on the system fill.
                 statusSection.icebergRows()
+                policySection.icebergRows()
                 vpnSection.icebergRows()
                 ringsSection.icebergRows()
                 countersSection.icebergRows()
@@ -68,6 +70,39 @@ struct DiagnosticsView: View {
                     .foregroundStyle(Theme.deny)
                     .textSelection(.enabled)
             }
+        }
+    }
+
+    private var policySection: some View {
+        Section {
+            LabeledContent("Generation", value: String(policy.stats.generation))
+            LabeledContent("Apps", value: String(policy.stats.apps))
+            LabeledContent("Domain rules", value: String(policy.stats.domainRules))
+            LabeledContent("Address trie nodes", value: String(policy.stats.addressNodes))
+            LabeledContent("Blob size") {
+                Text(policy.lastCompiledSize == 0 ? "not published"
+                     : "\(policy.lastCompiledSize) bytes")
+                    .foregroundStyle(policy.lastCompiledSize == 0 ? Theme.warning : Theme.textPrimary)
+            }
+
+            Button("Seed apps from observed flows") {
+                let observed = Array(Set(diagnostics.snapshot.records.map(\.sourceApp)))
+                    .filter { !$0.isEmpty }
+                policy.seed(fromObservedApps: observed)
+            }
+            Button("Publish policy") { policy.publish() }
+            Button("Reset policy", role: .destructive) { policy.reset() }
+
+            if let error = policy.lastError {
+                Text(error).font(.footnote).foregroundStyle(Theme.deny)
+            }
+        } header: {
+            Text("Policy engine")
+        } footer: {
+            Text("The app compiles rules into policy.bin; the providers mmap it read-only and pick "
+                 + "up a new generation within a couple of seconds. Until a policy is published the "
+                 + "providers fall back to the spike rule set, so behaviour never changes silently "
+                 + "just because the file is missing.")
         }
     }
 
@@ -127,6 +162,8 @@ struct DiagnosticsView: View {
             counter("Filter starts", .filterStarts)
             counter("Filter stops", .filterStops)
             counter("Ring write failures", .writeFailures)
+            counter("Policy decisions", .policyDecisions)
+            counter("Spike fallback decisions", .spikeFallbackDecisions)
         }
     }
 

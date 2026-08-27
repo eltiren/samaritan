@@ -24,6 +24,11 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     /// constructed before the initialiser body, so a failure there would kill the extension before
     /// it could log anything at all.
     private var store: DiagnosticsStore?
+
+    /// The compiled policy, memory-mapped read-only. `nil` verdicts mean no policy is loaded, in
+    /// which case the spike's trivial rule set still applies — the filter never silently changes
+    /// behaviour because a file is missing.
+    private var policy: PolicySource?
     private let lock = NSLock()
 
     private var configuration = SpikeConfiguration.default
@@ -53,6 +58,9 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
 
         let hasContainer = SharedContainer.containerURL != nil
         store = DiagnosticsStore(writer: .dataProvider)
+        if let policyPath = SharedContainer.policyURL?.path {
+            policy = PolicySource(path: policyPath)
+        }
         let hasStore = store != nil
         PathObserver.shared.start()
         reloadConfiguration(force: true)
@@ -88,10 +96,8 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         let verdict: NEFilterNewFlowVerdict
         var counters: [DiagnosticsStore.Counter: UInt64] = [.flowsObserved: 1]
 
-        let outcome = SpikeResolver.evaluate(hostname: record.remoteHostname,
-                                             address: record.remoteAddress,
-                                             rules: rules,
-                                             denyMode: configuration.denyMode)
+        let outcome = resolve(record: record, rules: rules, configuration: configuration,
+                              counters: &counters, now: started)
 
         switch outcome {
         case .denyInline(let label):
@@ -180,6 +186,33 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
             action=\(self.filterActionName(report.action), privacy: .public) \
             in=\(record.bytesInbound) out=\(record.bytesOutbound)
             """)
+    }
+
+    // MARK: - Resolution
+
+    /// Prefers the compiled policy; falls back to the spike rule set when none is loaded.
+    private func resolve(record: FlowRecord,
+                         rules: SpikeRuleSet,
+                         configuration: SpikeConfiguration,
+                         counters: inout [DiagnosticsStore.Counter: UInt64],
+                         now: UInt64) -> PolicyOutcome {
+        if let policy {
+            let address = record.remoteAddress.isEmpty ? nil : IPPrefix(record.remoteAddress)
+            let hostname = record.remoteHostname.isEmpty ? nil : record.remoteHostname
+            if let result = policy.evaluate(appID: record.sourceApp, hostname: hostname,
+                                            address: address, now: now) {
+                counters[.policyDecisions] = 1
+                guard result.verdict.action == .deny else { return .allow }
+                return configuration.denyMode == .escalate
+                    ? .denyEscalated(rule: result.label)
+                    : .denyInline(rule: result.label)
+            }
+        }
+        counters[.spikeFallbackDecisions] = 1
+        return SpikeResolver.evaluate(hostname: record.remoteHostname,
+                                      address: record.remoteAddress,
+                                      rules: rules,
+                                      denyMode: configuration.denyMode)
     }
 
     // MARK: - Sandbox probe

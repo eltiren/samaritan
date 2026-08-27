@@ -12,8 +12,8 @@ struct PolicyWorkedExampleTests {
     private let safari = ".com.apple.mobilesafari"
     private let whatsapp = "57T9237FN3.net.whatsapp.WhatsApp"
 
-    private func engine(_ document: PolicyDocument) -> PolicyEngine {
-        PolicyEngine(policy: PolicyCompiler.compile(document))
+    private func engine(_ document: PolicyDocument) -> TestEngine {
+        TestEngine(document)
     }
 
     private func webList(_ rules: [(String, PolicyRule.Kind)], action: RuleAction) -> WebList {
@@ -124,10 +124,8 @@ struct PolicyMatchingTests {
     /// reason — these tests are about *matching*, not about the blanket default.
     private let app = "TEAM.com.test.app"
 
-    private func engine(_ rules: [PolicyRule]) -> PolicyEngine {
-        PolicyEngine(policy: PolicyCompiler.compile(PolicyDocument(
-            apps: [AppPolicy(appID: app, blanket: .allowAll)],
-            userRules: rules)))
+    private func engine(_ rules: [PolicyRule]) -> TestEngine {
+        TestEngine(PolicyDocument(apps: [AppPolicy(appID: app, blanket: .allowAll)], userRules: rules))
     }
 
     @Test("exact beats suffix regardless of declaration order")
@@ -214,9 +212,8 @@ struct PolicyMatchingTests {
 
     @Test("an unmatched host under deny-all is denied by the blanket, not by a rule")
     func unmatchedIsBlanketDenied() {
-        let policy = PolicyCompiler.compile(PolicyDocument(
+        let verdict = TestEngine(PolicyDocument(
             userRules: [PolicyRule(kind: .domainSubstring, value: "google", action: .deny)]))
-        let verdict = PolicyEngine(policy: policy)
             .evaluate(appID: "TEAM.com.third.party", hostname: "apple.com", address: nil)
         #expect(verdict.action == .deny)
         #expect(verdict.source == .blanket)   // the substring rule did not match
@@ -237,5 +234,34 @@ struct PolicyMatchingTests {
         let verdict = engine.evaluate(appID: app, hostname: "a.example.com", address: nil)
         #expect(verdict.source == .userList)
         #expect(engine.label(for: verdict) == "userList:deny:*.example.com")
+    }
+}
+
+
+/// Compiles a document and evaluates through it, keeping the compiled storage alive for the call.
+///
+/// Deliberately round-trips through the on-disk blob rather than using the compiler's arrays
+/// directly, so every test also exercises serialisation, the stride checks and the mapped-memory
+/// view — which is what the data provider will actually run against.
+struct TestEngine {
+    private let data: Data
+
+    init(_ document: PolicyDocument) {
+        data = PolicyBlob.serialise(PolicyCompiler.compile(document))
+    }
+
+    private func withEngine<R>(_ body: (PolicyEngine) -> R) -> R {
+        data.withUnsafeBytes { raw in
+            let view = try! PolicyBlob.view(over: raw.baseAddress!, length: raw.count)
+            return body(PolicyEngine(view: view))
+        }
+    }
+
+    func evaluate(appID: String, hostname: String?, address: IPPrefix?) -> PolicyEngine.Verdict {
+        withEngine { $0.evaluate(appID: appID, hostname: hostname, address: address) }
+    }
+
+    func label(for verdict: PolicyEngine.Verdict) -> String {
+        withEngine { $0.label(for: verdict) }
     }
 }

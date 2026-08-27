@@ -45,6 +45,16 @@ public enum SharedContainer {
         containerURL?.appendingPathComponent("spike-config.json", isDirectory: false)
     }
 
+    /// The compiled policy blob. Written by the app, `mmap`ed read-only by the providers.
+    public static var policyURL: URL? {
+        containerURL?.appendingPathComponent("policy.bin", isDirectory: false)
+    }
+
+    /// The editable policy document, app-side only.
+    public static var policyDocumentURL: URL? {
+        containerURL?.appendingPathComponent("policy.json", isDirectory: false)
+    }
+
     /// Diagnostic files must be readable while the device is locked — a content filter runs
     /// long before and long after the user unlocks. `completeUntilFirstUserAuthentication` is the
     /// weakest protection class that still guarantees that after the first unlock following boot.
