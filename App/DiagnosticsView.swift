@@ -81,6 +81,11 @@ struct DiagnosticsView: View {
             } label: {
                 Label("Apps", systemImage: "square.grid.2x2")
             }
+            NavigationLink {
+                GlobalListsView(policy: policy)
+            } label: {
+                Label("Global lists", systemImage: "list.bullet.rectangle")
+            }
         }
     }
 

@@ -118,6 +118,44 @@ final class PolicyStore {
         publish()
     }
 
+    // MARK: - Subscriptions
+
+    /// Adds a subscription only if it fetches and parses. A list that has never fetched
+    /// successfully cannot exist, so there is no silently-empty state to reason about later.
+    func addWebList(name: String, url: URL, action: RuleAction) async throws {
+        let lines = try await WebListFetcher.fetch(url: url, action: action)
+        document.webLists.append(WebList(
+            name: name.isEmpty ? (url.host ?? url.absoluteString) : name,
+            url: url, action: action, lines: lines, lastFetchedAt: Date()))
+        publish()
+    }
+
+    /// A failed refresh keeps the last good copy. Dropping a deny list on a network error would
+    /// fail open, which is the wrong direction.
+    func refresh(_ list: WebList) async -> String? {
+        do {
+            let lines = try await WebListFetcher.fetch(url: list.url, action: list.action)
+            guard let index = document.webLists.firstIndex(where: { $0.id == list.id }) else { return nil }
+            document.webLists[index].lines = lines
+            document.webLists[index].lastFetchedAt = Date()
+            publish()
+            return nil
+        } catch {
+            return (error as? WebListParser.Failure)?.message ?? error.localizedDescription
+        }
+    }
+
+    func setEnabled(_ isEnabled: Bool, for list: WebList) {
+        guard let index = document.webLists.firstIndex(where: { $0.id == list.id }) else { return }
+        document.webLists[index].isEnabled = isEnabled
+        publish()
+    }
+
+    func remove(_ list: WebList) {
+        document.webLists.removeAll { $0.id == list.id }
+        publish()
+    }
+
     func reset() {
         document = PolicyDocument()
         publish()
