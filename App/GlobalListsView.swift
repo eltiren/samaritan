@@ -23,7 +23,8 @@ struct GlobalListsView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .foregroundStyle(Theme.textPrimary)
-        .navigationTitle("Lists")
+        .navigationTitle("Global")
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showingAddList) {
             AddWebListView(policy: policy)
         }

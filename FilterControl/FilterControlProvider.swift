@@ -21,6 +21,10 @@ final class FilterControlProvider: NEFilterControlProvider {
 
     private var store: DiagnosticsStore?
     private var policy: PolicySource?
+
+    /// The control provider is the only one of the three processes that can write, so it owns the
+    /// record of what each app asked for.
+    private var observed: ObservedStore?
     private let lock = NSLock()
     /// Flip `updateRules` exactly once so the data provider's `handleRulesChanged()` can be
     /// observed without a rules-change storm.
@@ -34,6 +38,7 @@ final class FilterControlProvider: NEFilterControlProvider {
         if let policyPath = SharedContainer.policyURL?.path {
             policy = PolicySource(path: policyPath)
         }
+        observed = ObservedStore()
         PathObserver.shared.start()
         Log.flows.log("""
             CONTROL PROVIDER startFilter ready container=\(SharedContainer.containerURL != nil, privacy: .public) \
@@ -45,6 +50,7 @@ final class FilterControlProvider: NEFilterControlProvider {
 
     override func stopFilter(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         Log.control.log("stopFilter reason=\(reason.rawValue, privacy: .public)")
+        observed?.flush()
         store?.increment([.filterStops: 1])
         completionHandler()
     }
@@ -102,6 +108,14 @@ final class FilterControlProvider: NEFilterControlProvider {
         record.decisionNanos = finished &- started
         store?.append(record, incrementing: counters)
 
+        observed?.record(appID: record.sourceApp,
+                         host: record.remoteHostname,
+                         address: record.remoteAddress,
+                         port: record.remotePort,
+                         denied: record.verdict.isDrop,
+                         rule: record.matchedRule.isEmpty ? nil : record.matchedRule)
+        observed?.flushIfNeeded(now: finished)
+
         Log.flows.log("""
             CTLDONE id=\(record.flowIdentifier, privacy: .public) t=\(finished) \
             verdict=\(record.verdict.label, privacy: .public)
@@ -154,6 +168,17 @@ final class FilterControlProvider: NEFilterControlProvider {
             .reportedBytesInbound: record.bytesInbound,
             .reportedBytesOutbound: record.bytesOutbound,
         ])
+
+        // Reports are the only sight the control provider gets of flows it never handled, so this is
+        // where *allowed* destinations are recorded. Without it the app list would only ever show
+        // apps that are blocked.
+        observed?.record(appID: record.sourceApp,
+                         host: record.remoteHostname,
+                         address: record.remoteAddress,
+                         port: record.remotePort,
+                         denied: report.action == .drop,
+                         rule: nil)
+        observed?.flushIfNeeded(now: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
 
         Log.flows.log("""
             REPORT[control] id=\(record.flowIdentifier, privacy: .public) \

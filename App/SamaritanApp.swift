@@ -12,7 +12,7 @@ struct SamaritanApp: App {
 
     var body: some Scene {
         WindowGroup {
-            DiagnosticsView(filter: filter, diagnostics: diagnostics, policy: policy)
+            RootView(filter: filter, diagnostics: diagnostics, policy: policy)
                 .tint(Theme.accent)
                 .task {
                     SandboxProbe.run()

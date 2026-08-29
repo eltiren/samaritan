@@ -12,11 +12,12 @@ struct AppDetailView: View {
     private var identity: AppIdentity { AppIdentity(raw: appID) }
     private var appPolicy: AppPolicy { policy.document[appID] ?? AppPolicy(appID: appID) }
 
-    private var observed: [ObservedActivity.Destination] {
-        let activity = ObservedActivity(records: diagnostics.snapshot.records)
+    private var observed: [ObservedDestination] {
         let decided = Set(appPolicy.rules.map(\.value))
         // "Observed" is only what no rule has spoken for yet.
-        return (activity.app(appID)?.destinations ?? []).filter { !decided.contains($0.ruleTarget) }
+        return (diagnostics.observedApp(appID)?.destinations.values ?? [:].values)
+            .filter { !decided.contains($0.host) }
+            .sorted { $0.lastSeen > $1.lastSeen }
     }
 
     var body: some View {
@@ -44,8 +45,8 @@ struct AppDetailView: View {
                 }
                 ForEach(observed) { destination in
                     Button {
-                        pendingRule = RuleDraft(target: destination.ruleTarget,
-                                                isAddress: destination.isAddressOnly,
+                        pendingRule = RuleDraft(target: destination.host,
+                                                isAddress: IPPrefix(destination.host) != nil,
                                                 appID: appID)
                     } label: {
                         DestinationRow(destination: destination)
@@ -98,19 +99,19 @@ struct AppDetailView: View {
 }
 
 private struct DestinationRow: View {
-    let destination: ObservedActivity.Destination
+    let destination: ObservedDestination
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(destination.ruleTarget)
+                Text(destination.host)
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                 Spacer()
                 Text("×\(destination.attempts)")
                     .font(.caption2)
-                    .foregroundStyle(destination.wasDenied ? Theme.deny : Theme.textSecondary)
+                    .foregroundStyle(destination.denied ? Theme.deny : Theme.textSecondary)
             }
             let detail = [
                 destination.addresses.sorted().prefix(2).joined(separator: ", "),

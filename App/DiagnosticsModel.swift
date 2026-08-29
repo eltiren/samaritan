@@ -47,6 +47,10 @@ final class DiagnosticsModel {
     /// Result of the built-in traffic generator, so the drop test can be run without leaving the app.
     private(set) var probeResults: [String] = []
 
+    /// Per-app history, written by the control provider. Read-only here except for `clear`.
+    private(set) var observedApps: [ObservedApp] = []
+    private let observed = ObservedStore()
+
     private var stores: [SharedContainer.Writer: DiagnosticsStore] = [:]
     private var timer: Timer?
 
@@ -99,6 +103,8 @@ final class DiagnosticsModel {
         }
         perWriter = byWriter
         snapshot = merged
+        observed?.reload()
+        observedApps = observed?.snapshot() ?? []
         interfaces = NetworkInterfaces.current().filter { $0.isUp }
     }
 
@@ -106,6 +112,15 @@ final class DiagnosticsModel {
         for store in stores.values { store.reset() }
         probeResults.removeAll()
         refresh()
+    }
+
+    func clearObserved() {
+        observed?.clear()
+        refresh()
+    }
+
+    func observedApp(_ appID: String) -> ObservedApp? {
+        observedApps.first { $0.appID == appID }
     }
 
     // MARK: - Configuration

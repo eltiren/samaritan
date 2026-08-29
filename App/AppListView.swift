@@ -5,32 +5,28 @@ struct AppListView: View {
     @Bindable var diagnostics: DiagnosticsModel
     @Bindable var policy: PolicyStore
 
-    private var activity: ObservedActivity {
-        ObservedActivity(records: diagnostics.snapshot.records)
-    }
-
     var body: some View {
-        let observed = activity
+        let observed = diagnostics.observedApps
         // Apps with a policy entry but no recent traffic still need a row, or a rule you wrote
         // yesterday becomes unreachable.
         let quiet = policy.document.apps
             .map(\.appID)
-            .filter { id in !observed.apps.contains { $0.appID == id } }
+            .filter { id in !observed.contains { $0.appID == id } }
 
         List {
             Section {
-                if observed.apps.isEmpty && quiet.isEmpty {
+                if observed.isEmpty && quiet.isEmpty {
                     Text("No network activity recorded yet.")
                         .foregroundStyle(Theme.textSecondary)
                 }
-                ForEach(observed.apps) { app in
+                ForEach(observed, id: \.appID) { app in
                     NavigationLink {
                         AppDetailView(appID: app.appID, diagnostics: diagnostics, policy: policy)
                     } label: {
                         AppRow(appID: app.appID,
                                blanket: policy.document[app.appID]?.blanket,
-                               allowed: app.allowed, denied: app.denied,
-                               pending: app.destinations.filter(\.wasDenied).count)
+                               allowed: app.allowedCount, denied: app.deniedCount,
+                               pending: app.destinations.values.filter(\.denied).count)
                     }
                 }
                 ForEach(quiet, id: \.self) { appID in
@@ -44,8 +40,9 @@ struct AppListView: View {
             } header: {
                 Text("Apps")
             } footer: {
-                Text("Counts come from what the providers recorded, which is bounded — the ring "
-                     + "holds the most recent flows, not all of them.")
+                Text("Per-app history is bounded at \(ObservedStore.maximumDestinationsPerApp) "
+                     + "destinations each, evicting least-recently-seen, so a noisy app cannot "
+                     + "crowd out a quiet one.")
             }
             .icebergRows()
         }
@@ -54,6 +51,7 @@ struct AppListView: View {
         .background(Theme.background)
         .foregroundStyle(Theme.textPrimary)
         .navigationTitle("Apps")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

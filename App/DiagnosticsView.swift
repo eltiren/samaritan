@@ -15,7 +15,6 @@ struct DiagnosticsView: View {
             List {
                 // `.listRowBackground` has to be attached per Section — applied to the List it
                 // never reaches rows nested inside one, which left every row on the system fill.
-                appsLink.icebergRows()
                 statusSection.icebergRows()
                 policySection.icebergRows()
                 vpnSection.icebergRows()
@@ -23,14 +22,15 @@ struct DiagnosticsView: View {
                 countersSection.icebergRows()
                 probeSection.icebergRows()
                 configurationSection.icebergRows()
-                flowsSection.icebergRows()
+
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Theme.background)
             .foregroundStyle(Theme.textPrimary)
             .tint(Theme.accent)
-            .navigationTitle("Samaritan")
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -38,6 +38,7 @@ struct DiagnosticsView: View {
                             UIPasteboard.general.string = diagnostics.diagnosticsText()
                         }
                         Button("Reset counters", role: .destructive) { diagnostics.resetCounters() }
+                        Button("Clear observed history", role: .destructive) { diagnostics.clearObserved() }
                         Button("Remove filter configuration", role: .destructive) {
                             Task { await filter.removeConfiguration() }
                         }
@@ -74,20 +75,6 @@ struct DiagnosticsView: View {
         }
     }
 
-    private var appsLink: some View {
-        Section {
-            NavigationLink {
-                AppListView(diagnostics: diagnostics, policy: policy)
-            } label: {
-                Label("Apps", systemImage: "square.grid.2x2")
-            }
-            NavigationLink {
-                GlobalListsView(policy: policy)
-            } label: {
-                Label("Global lists", systemImage: "list.bullet.rectangle")
-            }
-        }
-    }
 
     private var policySection: some View {
         Section {
@@ -263,16 +250,6 @@ struct DiagnosticsView: View {
         }
     }
 
-    private var flowsSection: some View {
-        Section("Recent flows (\(diagnostics.snapshot.records.count))") {
-            if diagnostics.snapshot.records.isEmpty {
-                Text("No flows recorded yet.").foregroundStyle(Theme.textSecondary)
-            }
-            ForEach(diagnostics.snapshot.records.prefix(100)) { record in
-                FlowRow(record: record)
-            }
-        }
-    }
 
     private func splitList(_ text: String) -> [String] {
         text.split(separator: ",")
@@ -285,48 +262,5 @@ extension View {
     func icebergRows() -> some View {
         listRowBackground(Theme.surface)
             .listRowSeparatorTint(Theme.textSecondary.opacity(0.3))
-    }
-}
-
-private struct FlowRow: View {
-    let record: FlowRecord
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(record.verdict.label)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Theme.color(for: record.verdict))
-                Text(record.origin == .dataProvider ? "D" : "C")
-                    .font(.caption2).foregroundStyle(Theme.textSecondary)
-                Text(record.remoteDescription)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                Spacer()
-                Text(record.timestamp, format: .dateTime.hour().minute().second())
-                    .font(.caption2).foregroundStyle(Theme.textSecondary)
-            }
-            Text(record.appDescription)
-                .font(.caption2)
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-            Text(detail)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(2)
-        }
-        .textSelection(.enabled)
-    }
-
-    private var detail: String {
-        var parts = ["\(record.socketFamilyName)/\(record.socketProtocolName)"]
-        if !record.localDescription.isEmpty { parts.append("local=\(record.localDescription)") }
-        parts.append("path=[\(record.pathFlags.summary)]")
-        if !record.matchedRule.isEmpty { parts.append("rule=\(record.matchedRule)") }
-        if record.bytesInbound > 0 || record.bytesOutbound > 0 {
-            parts.append("in=\(record.bytesInbound) out=\(record.bytesOutbound)")
-        }
-        parts.append("\(record.decisionNanos / 1000)us")
-        return parts.joined(separator: " ")
     }
 }
