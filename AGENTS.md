@@ -66,6 +66,23 @@ grep -c wasCreatedForAppExtension Samaritan.xcodeproj/xcshareddata/xcschemes/Sam
 Xcode may still auto-create *user* schemes for the two extension targets (they land in
 `xcuserdata/`, not in git). Ignore them and select the shared `Samaritan` scheme.
 
+## Rule 3c: the first statement of `handleNewFlow` is the bypass check
+
+`FilterDataProvider.handleNewFlow` begins with an L0 bypass test and an early `return .allow()`.
+Nothing may be inserted above it, and nothing that runs below it may be moved above it.
+
+"Bypass" means the app is invisible to Samaritan — not "allowed after processing". A bypassed flow
+must produce no `FlowRecord`, no ring append, no Observed entry, no counter, no log line, no
+configuration reload and no sandbox probe. A timing measurement or a "just one counter" added above
+the return is a behaviour change, not an instrumentation change.
+
+The test reads `BypassGate` without taking `lock`, by design: it is one atomic pointer load and one
+`Set` membership test. Do not add a lock, a `stat`, an allocation or an `await` to that path.
+
+Entries are raw `sourceAppIdentifier` strings (`<teamID>.<bundleID>`), never bundle IDs. Normalising
+them would make every stored bypass stop matching, silently. See `docs/firewall-rules.md` §1.3 and
+§2.0.
+
 ## Rule 4: this is a spike
 
 Milestone 1 proves NetworkExtension behaves on a real device. Do not build the CIDR/policy engine,

@@ -51,6 +51,20 @@ Rules are keyed on the **full `sourceAppIdentifier` string**, and the bundle ID 
 displayed. [PROPOSED] Keying on bundle ID alone would let a different signer inherit another app's
 policy.
 
+Measured on device: [DEVICE]
+
+| Kind | Example | Team component |
+|---|---|---|
+| Third-party app | `BQR82RBBHL.com.tinyspeck.chatlyio` | the signing team ID |
+| Third-party app | `C67CF9S4VU.ph.telegra.Telegraph` | the signing team ID |
+| Apple platform binary | `.com.apple.mobilemail` | **empty**, so the string starts with `.` |
+| Apple daemon | `.com.apple.rapportd` | empty |
+
+So it is a **signing identifier, not a bundle ID**: `<teamID>.<bundleID>`. Nothing that compares this
+against a bundle ID can ever match. Across a full-day capture, every flow carried one — no `nil`, no
+empty — but the code treats both as possible, because a single counter-example silently converts
+default-deny into default-allow-and-forget.
+
 "Apps whose bundle identifier starts with `com.apple`" [STATED] is implemented as: [DERIVED]
 
 ```
@@ -62,7 +76,23 @@ prefix test alone would also match a third-party `com.appleseed.*`, and the trai
 that too.
 
 Flows with no `sourceAppIdentifier` are attributed to a reserved pseudo-app, **`<unattributed>`**,
-which appears in the app list and has its own rule set. [PROPOSED]
+which appears in the app list and has its own rule set. [PROPOSED] It is a display key only — no
+flow carries that string — so it cannot be bypassed (§2.0), and `PolicyEngine` maps an empty
+identifier onto it before matching so a rule written against the row still applies.
+
+**One app is not necessarily one identifier.** [DEVICE, partial] App extensions and helper processes
+are signed into the same team but carry their own bundle IDs, and the same bundle can appear under
+two teams (a sideloaded and a store build). Each is a separate row and a separate policy. This is
+correct — they really are different binaries — but it is also the most likely reason a rule looks
+like it is not working, so the app screen lists an app's sibling identifiers explicitly rather than
+merging them (§7.2).
+
+**Open, and only answerable on device:** whether media playback in a large streaming app is
+attributed to the app itself or to a system media daemon. If playback runs through, say,
+`.com.apple.mediaplaybackd`, then bypassing the app's own identifier will not exempt the traffic
+that matters, and the daemon's identifier has to be bypassed too — with the obvious consequence that
+it is shared with every other app that plays media. The `IDENT NEW` log line in
+`FilterDataProvider` exists to answer exactly this; see the capture procedure in `README.md`.
 
 ---
 
@@ -74,7 +104,11 @@ which appears in the app list and has its own rule set. [PROPOSED]
 INPUT  flow { app, hostname?, address?, port, proto }
 
   │
-  ├─ L0  NORMALISE
+  ├─ L0  BYPASS ....................................... terminal, before anything else
+  │      the flow's raw sourceAppIdentifier is in the bypass set
+  │      →  ALLOW immediately. Nothing is parsed, recorded, counted or logged.
+  │
+  ├─     NORMALISE
   │      app  → (teamID, bundleID)
   │      host → lowercase, strip trailing dot, IDN → punycode
   │      ip   → literal address; discard :: and 0.0.0.0 as "no address"
@@ -96,6 +130,43 @@ INPUT  flow { app, hostname?, address?, port, proto }
          Apple system app          →  ALLOW      (ships with Allow-all pre-enabled)
          otherwise                 →  DENY, and record in this app's Observed list
 ```
+
+### 2.0 Bypass is not a rule — it is an exit
+
+Every other tier is a decision *about* a flow: the flow is inspected, matched, recorded, and a
+verdict comes out. **Bypass is the absence of all of that.** It is checked before the clock is read,
+before `FlowInspector` touches the flow object, and before any lock is taken. A bypassed flow is
+allowed and forgotten.
+
+This is what makes it different from `Allow all`, which people will otherwise assume it duplicates:
+
+| | Allow all | Bypass |
+|---|---|---|
+| Verdict when nothing matches | allow | allow |
+| Can a global deny list override it? | **yes** | no |
+| Can a per-app deny rule override it? | **yes** | no |
+| Destinations recorded in Observed | **yes** | no |
+| Appears in Recent flows | **yes** | no |
+| Counted in the diagnostics counters | **yes** | no |
+| Byte counts via `NEFilterReport` | **yes** | no |
+| Cost per flow | full resolve | one set lookup |
+
+Allow-all is a *permissive policy*. Bypass is *not having a policy*: the app is invisible to
+Samaritan, and Samaritan is invisible to the app. Nothing below L0 can override it, because nothing
+below L0 runs.
+
+The set is keyed on the **raw `sourceAppIdentifier`, exactly as the flow carries it**. This is the
+one place where the identity question in §1.3 is not merely academic: a bypass stored as a bundle ID
+compiles, saves, displays as "on", and never fires. The UI therefore only ever stores identifiers
+that came from a flow the providers actually recorded, and `BypassList.sanitise` drops
+`<unattributed>` — a display-only pseudo-identifier that no flow carries.
+
+**Delivery.** Bypass has its own file, `bypass.json`, not a section of `policy.bin`. The compiled
+policy is reached through a throttled `stat(2)` behind the provider's lock; L0 has to answer before
+either of those, so it is published separately as an immutable `Set<String>` swapped behind one
+atomic pointer. The data provider reads it with an acquiring load and a hash lookup — no lock, no
+`stat`, no allocation. It is refreshed off the hot path by a watch on the container directory, a
+5-second timer, and `handleRulesChanged()`.
 
 ### 2.2 Blanket settings are only a default
 
@@ -124,7 +195,7 @@ those contradict each other.
 
 They reconcile if "priority over the whole app" means priority over the app's **blanket** setting
 (the Allow-all toggle and the Apple exemption), not over the app's **specific** host rules. That is
-the ladder above: L1 (specific, per app) beats L2/L3 (global lists), which beat L4/L5 (blanket).
+the ladder above: L1 (specific, per app) beats L2/L3 (global lists), which beat L4 (blanket).
 This satisfies the worked example exactly. **Confirmed.**
 
 Two consequences, both confirmed:
@@ -139,7 +210,9 @@ Two consequences, both confirmed:
 
 ```mermaid
 flowchart TD
-    A[New flow] --> B[Normalise app / host / ip]
+    A[New flow] --> Z{"sourceAppIdentifier<br/>in the bypass set?"}
+    Z -->|yes| BYPASS([ALLOW — nothing inspected,<br/>nothing recorded])
+    Z -->|no| B[Normalise app / host / ip]
     B --> C{Per-app rule matches?}
     C -->|allow| ALLOW([ALLOW])
     C -->|deny| DENY([DROP])
@@ -468,19 +541,32 @@ apply. Constraints on how it is used: [PROPOSED]
 
 ### 7.2 App screen
 
-Top to bottom, as specified: [STATED]
+Top to bottom: [STATED, plus bypass]
 
+0. **Bypass all filters** — toggle, in its own section above everything else. Off by default and
+   never offered for `<unattributed>`. While on: the Allow-all toggle is disabled (it is moot), the
+   Observed section is headed *stale* and its rows carry the timestamp bypass was enabled, and the
+   footer states plainly that **no destinations are recorded while bypass is on**. The screen must
+   not let anyone believe this is a stronger Allow-all — the two footers say so in as many words.
 1. **Allow all** — toggle. Default off, except for `com.apple.*` apps, which ship with it on.
    It means *allow everything I have not specifically denied, and that no global deny list bans* —
    not "allow everything". Turning it **off** for an Apple app is supported and puts that app under
    default-deny like any other.
-2. **Allowed** — this app's allow rules.
-3. **Denied** — this app's deny rules.
-4. **Observed** — attempted, undecided, and therefore dropped.
+2. **Same bundle, other identifiers** — shown only when they exist. Extensions, helper processes and
+   re-signed builds produce separate identifiers for what a person thinks of as one app, and each is
+   a separate policy. Listing them is what stops "I bypassed Netflix and it still doesn't play" from
+   being a mystery; each carries a one-tap *Bypass too*.
+3. **Allowed** — this app's allow rules.
+4. **Denied** — this app's deny rules.
+5. **Observed** — attempted, undecided, and therefore dropped.
 
 A per-app **deny** entry is not redundant under a default-deny policy: its purpose is to override a
 higher tier — a global allow list, the Allow-all toggle, or the Apple exemption. That is the only
 reason it exists, and the UI should say so.
+
+In the app list, a bypassed app is marked with a `BYPASSED` badge, its icon is dimmed, and its
+allowed/denied counts are replaced by *not filtered — nothing recorded*, because those counts are
+frozen at the moment bypass was switched on and would otherwise read as current.
 
 ### 7.3 The allow/deny popover
 
@@ -531,7 +617,7 @@ The remaining `[PROPOSED]` items are implementation choices rather than product 
 `[VERIFY]` items in §5 are the only things that could still force a design change.
 
 **[Q1] Apple exemption vs global lists — RESOLVED.**
-The exemption is a blanket **default**, not an override: L5 sits below L2/L3, so global lists and
+The exemption is a blanket **default**, not an override: L4 sits below L2/L3, so global lists and
 per-app rules apply to Apple apps and Safari remains filterable. "`com.apple.*` → ALLOW ALL" means
 "skips default-deny".
 
@@ -565,7 +651,7 @@ going to the App Store.
 This holds, and the milestone-1 captures are the evidence. Every flow observed during several
 minutes of normal use was attributed either to `com.apple.*` or to an identifiable third-party app;
 **no flow arrived unattributed.** The system-critical traffic — push, DNS, iCloud, Mail, App Store,
-Handoff, analytics, `symptomsd`, `rapportd` — is all `com.apple.*`, so L5 keeps the device fully
+Handoff, analytics, `symptomsd`, `rapportd` — is all `com.apple.*`, so L4 keeps the device fully
 functional with no rules configured at all.
 
 What this does mean, stated plainly:

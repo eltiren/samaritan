@@ -25,6 +25,7 @@ struct AppListView: View {
                     } label: {
                         AppRow(appID: app.appID,
                                blanket: policy.document[app.appID]?.blanket,
+                               bypassed: policy.document[app.appID]?.bypass ?? false,
                                allowed: app.allowedCount, denied: app.deniedCount,
                                pending: app.destinations.values.filter(\.denied).count)
                     }
@@ -34,6 +35,7 @@ struct AppListView: View {
                         AppDetailView(appID: appID, diagnostics: diagnostics, policy: policy)
                     } label: {
                         AppRow(appID: appID, blanket: policy.document[appID]?.blanket,
+                               bypassed: policy.document[appID]?.bypass ?? false,
                                allowed: 0, denied: 0, pending: 0)
                     }
                 }
@@ -58,6 +60,7 @@ struct AppListView: View {
 struct AppRow: View {
     let appID: String
     let blanket: BlanketMode?
+    let bypassed: Bool
     let allowed: Int
     let denied: Int
     let pending: Int
@@ -67,21 +70,39 @@ struct AppRow: View {
     var body: some View {
         HStack(spacing: 10) {
             AppIconView(identity: identity)
+                // A bypassed app is not being filtered at all, so its row should not read as a
+                // participating one.
+                .opacity(bypassed ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
-                Text(AppMetadata.entry(forBundleID: String(identity.bundleID)).displayName
-                     ?? identity.displayBundleID)
-                    .font(.callout)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(AppMetadata.entry(forBundleID: String(identity.bundleID)).displayName
+                         ?? identity.displayBundleID)
+                        .font(.callout)
+                        .lineLimit(1)
+                    if bypassed {
+                        Text("BYPASSED")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Theme.warning.opacity(0.22), in: Capsule())
+                            .foregroundStyle(Theme.warning)
+                    }
+                }
                 Text(identity.displayBundleID)
                     .font(.caption2)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                 HStack(spacing: 8) {
-                    if allowed > 0 { Text("\(allowed) allowed").foregroundStyle(Theme.allow) }
-                    if denied > 0 { Text("\(denied) denied").foregroundStyle(Theme.deny) }
-                    if pending > 0 { Text("\(pending) pending").foregroundStyle(Theme.warning) }
-                    if let blanket, blanket == .allowAll {
-                        Text("allow all").foregroundStyle(Theme.info)
+                    if bypassed {
+                        Text("not filtered — nothing recorded")
+                            .foregroundStyle(Theme.textSecondary)
+                    } else {
+                        if allowed > 0 { Text("\(allowed) allowed").foregroundStyle(Theme.allow) }
+                        if denied > 0 { Text("\(denied) denied").foregroundStyle(Theme.deny) }
+                        if pending > 0 { Text("\(pending) pending").foregroundStyle(Theme.warning) }
+                        if let blanket, blanket == .allowAll {
+                            Text("allow all").foregroundStyle(Theme.info)
+                        }
                     }
                 }
                 .font(.caption2)

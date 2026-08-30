@@ -685,6 +685,64 @@ denial, but it means the report channel cannot be used to confirm that a drop to
 Reproduce with `tools/escalation-report.py`; the procedure is in
 [`docs/firewall-rules.md` §5.2](docs/firewall-rules.md).
 
+## Milestone 2 — Bypass all filters
+
+A per-app rule class that exempts an app from Samaritan entirely. Not "allow after processing": the
+check is the first statement in `handleNewFlow`, before the clock is read, and a bypassed flow is
+allowed and forgotten — no `FlowInspector.record`, no ring append, no Observed entry, no counter,
+no log line, no configuration reload, no sandbox probe.
+
+Design and precedence are in [`docs/firewall-rules.md` §2.0](docs/firewall-rules.md).
+
+**Why the set is not part of `policy.bin`.** The compiled policy is reached through a throttled
+`stat(2)` behind the provider's lock. L0 has to answer before either, so bypass gets its own file
+(`bypass.json`) and its own publication path: an immutable `Set<String>` behind a single
+`Atomic<UnsafeRawPointer?>`. The hot path is one acquiring load and one hash lookup. Reloads happen
+off the hot path — a vnode watch on the container **directory** (not the file: `Data.write(.atomic)`
+renames over it, which a file-descriptor watch never sees), a 5-second timer as a fallback, and
+`handleRulesChanged()`.
+
+Published snapshots are never freed. Readers hold a bare pointer with no reference count, so
+reclaiming one safely needs a quiescence protocol that would cost the hot path exactly what the
+design exists to avoid. Growth is bounded from the other end instead: an unchanged set is not
+republished, so the timer costs nothing, and each snapshot is a handful of short strings.
+
+### ⚠️ A bypass keyed on a bundle ID silently never fires
+
+`sourceAppIdentifier` is `<teamID>.<bundleID>` — a signing identifier, not a bundle ID (§1.3). The
+bypass set is compared against it verbatim, so `com.netflix.Netflix` would save, display as on, and
+never match anything. Every identifier the UI stores comes from a row the providers recorded, which
+is the only reason this is safe; `BypassTests` pins the mismatch so nobody "fixes" it by normalising.
+
+The same trap applies to allow/deny rules, and there it is already handled: the app list, the policy
+document and `PolicyEngine` all key on the same raw string, and `PolicyEngine` maps an empty
+identifier onto `<unattributed>` before matching so the pseudo-app's rules work. **No mismatch found
+in the existing rule path.**
+
+### Capturing what `sourceAppIdentifier` really contains
+
+`FilterDataProvider.noteIdentity` logs each distinct identifier once, verbatim, distinguishing `nil`
+from empty. `logEveryFlow` (Settings, on by default) additionally prints `app=` per flow.
+
+```sh
+idevicesyslog -u <UDID> | tee ~/device.log
+# then, on the phone: open the app under test and drive the feature you care about
+grep "IDENT NEW" ~/device.log
+grep -ohE "app=[^ ]*" ~/device.log | sort | uniq -c | sort -rn
+```
+
+`IDENT NEW` reports the raw string, the team and bundle halves, whether it parses as an Apple
+platform binary, whether it is currently bypassed, the protocol, and the hostname of the flow that
+introduced it. What to look for:
+
+- **more than one identifier per app** — extensions and helper processes have their own bundle IDs;
+  each needs its own bypass. The app screen lists siblings for this reason.
+- **an identifier that is not the app at all** — if media playback is attributed to a system daemon,
+  bypassing the app will not exempt the traffic that matters, and bypassing the daemon exempts it
+  for every app on the device. Open question; see §1.3.
+- **`raw=<nil>` or `raw=<empty>`** — never seen in captures so far. Such a flow cannot be bypassed
+  (there is nothing to match) and falls to `<unattributed>` under default-deny.
+
 ## References
 
 - Apple, [TN3134: Network Extension provider deployment][tn3134]

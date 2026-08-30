@@ -55,6 +55,12 @@ public enum SharedContainer {
         containerURL?.appendingPathComponent("policy.json", isDirectory: false)
     }
 
+    /// The bypass set. Its own file, not a section of `policy.bin`, because the data provider has
+    /// to answer it before it touches the policy or its lock. See `BypassGate`.
+    public static var bypassURL: URL? {
+        containerURL?.appendingPathComponent(BypassList.fileName, isDirectory: false)
+    }
+
     /// Diagnostic files must be readable while the device is locked — a content filter runs
     /// long before and long after the user unlocks. `completeUntilFirstUserAuthentication` is the
     /// weakest protection class that still guarantees that after the first unlock following boot.

@@ -42,14 +42,20 @@ final class PolicyStore {
 
         do {
             guard let blobURL = SharedContainer.policyURL,
-                  let documentURL = SharedContainer.policyDocumentURL else {
+                  let documentURL = SharedContainer.policyDocumentURL,
+                  let bypassURL = SharedContainer.bypassURL else {
                 throw CocoaError(.fileNoSuchFile)
             }
+            // Bypass first. It is the tier that decides whether a flow is looked at at all, so on
+            // the transition that matters — switching it on — it should take effect no later than
+            // the rules it overrides.
+            let bypassList = document.bypassList
+            try JSONEncoder().encode(bypassList).write(to: bypassURL, options: .atomic)
             try JSONEncoder().encode(document).write(to: documentURL, options: .atomic)
             try blob.write(to: blobURL, options: .atomic)
             // Providers run while the device is locked; without this the mapping fails after a
             // reboot until first unlock.
-            for url in [blobURL, documentURL] {
+            for url in [blobURL, documentURL, bypassURL] {
                 try? FileManager.default.setAttributes(
                     [.protectionKey: SharedContainer.fileProtection], ofItemAtPath: url.path)
             }
@@ -57,7 +63,8 @@ final class PolicyStore {
             lastError = nil
             Log.policy.log("""
                 [\(Log.process, privacy: .public)] policy published generation=\(self.document.generation) \
-                bytes=\(blob.count) apps=\(compiled.apps.count)
+                bytes=\(blob.count) apps=\(compiled.apps.count) \
+                bypass=[\(bypassList.identifiers.joined(separator: " "), privacy: .public)]
                 """)
         } catch {
             lastError = error.localizedDescription
@@ -84,6 +91,21 @@ final class PolicyStore {
     func setBlanket(_ blanket: BlanketMode, for appID: String) {
         var app = document[appID] ?? AppPolicy(appID: appID)
         app.blanket = blanket
+        upsert(app)
+    }
+
+    /// Exempts an app from Samaritan entirely, or stops doing so.
+    ///
+    /// `appID` must be the raw `sourceAppIdentifier` a flow carries. Everything that reaches here
+    /// comes from a row the providers recorded, so it already is; a value typed by hand or derived
+    /// from a bundle ID would compile fine and then silently never match.
+    func setBypass(_ bypass: Bool, for appID: String) {
+        guard appID != AppIdentity.unattributedRaw else { return }
+        var app = document[appID] ?? AppPolicy(appID: appID)
+        guard app.bypass != bypass else { return }
+        app.bypass = bypass
+        // Kept so the Observed list can mark what it holds as stale instead of deleting it.
+        app.bypassSince = bypass ? Date() : nil
         upsert(app)
     }
 

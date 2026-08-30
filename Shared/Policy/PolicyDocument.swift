@@ -17,14 +17,40 @@ public struct AppPolicy: Codable, Sendable, Identifiable, Hashable {
     public var blanket: BlanketMode
     public var rules: [PolicyRule]
 
+    /// Exempt this app from Samaritan entirely (§2.0). Not a strong form of Allow-all: an
+    /// allow-all app is still observed and can still be overridden by a deny list, whereas a
+    /// bypassed app is never inspected, recorded or counted at all.
+    public var bypass: Bool
+
+    /// When bypass was last turned on, or `nil` if it is off.
+    ///
+    /// Kept so the Observed list can mark what it already holds as stale rather than deleting it.
+    /// Existing history is still the truth about what the app did before it was exempted.
+    public var bypassSince: Date?
+
     public var id: String { appID }
 
-    public init(appID: String, blanket: BlanketMode? = nil, rules: [PolicyRule] = []) {
+    public init(appID: String, blanket: BlanketMode? = nil, rules: [PolicyRule] = [],
+                bypass: Bool = false, bypassSince: Date? = nil) {
         self.appID = appID
         // Apple's binaries ship with Allow-all on. This is the *only* place an Apple bundle ID
         // influences anything — the resolver has no special tier for it (§2.2).
         self.blanket = blanket ?? (AppIdentity(raw: appID).isAppleSystemApp ? .allowAll : .denyAll)
         self.rules = rules
+        self.bypass = bypass
+        self.bypassSince = bypassSince
+    }
+
+    /// Written out rather than synthesised: synthesised `Codable` ignores property defaults and
+    /// throws `keyNotFound`, so adding `bypass` would have made every policy saved before it
+    /// undecodable — which silently resets the whole firewall to empty.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        appID = try container.decode(String.self, forKey: .appID)
+        blanket = try container.decode(BlanketMode.self, forKey: .blanket)
+        rules = try container.decode([PolicyRule].self, forKey: .rules)
+        bypass = try container.decodeIfPresent(Bool.self, forKey: .bypass) ?? false
+        bypassSince = try container.decodeIfPresent(Date.self, forKey: .bypassSince)
     }
 }
 
@@ -71,6 +97,17 @@ public struct PolicyDocument: Codable, Sendable {
 
     public subscript(appID: String) -> AppPolicy? {
         apps.first { $0.appID == appID }
+    }
+
+    /// The raw identifiers published to `BypassGate`, in the exact form a flow carries them.
+    public var bypassedIdentifiers: [String] {
+        BypassList.sanitise(apps.filter(\.bypass).map(\.appID))
+    }
+
+    /// The bypass file the providers read. Separate from the compiled blob on purpose — see
+    /// `BypassGate`.
+    public var bypassList: BypassList {
+        BypassList(generation: generation, identifiers: bypassedIdentifiers)
     }
 
     public mutating func upsert(_ policy: AppPolicy) {

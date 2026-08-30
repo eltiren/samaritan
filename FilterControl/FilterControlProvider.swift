@@ -25,6 +25,15 @@ final class FilterControlProvider: NEFilterControlProvider {
     /// The control provider is the only one of the three processes that can write, so it owns the
     /// record of what each app asked for.
     private var observed: ObservedStore?
+
+    /// The same bypass set the data provider reads.
+    ///
+    /// By construction this process should never see a bypassed flow: the data provider allows it
+    /// without escalating and without `shouldReport`, so neither `handleNewFlow` nor `handle(_:)`
+    /// can be reached. The check is here anyway to close the window where bypass is switched on
+    /// while a flow is already in flight, which would otherwise append one more entry to the
+    /// Observed list of an app that is supposed to have stopped updating.
+    private let bypass = BypassGate()
     private let lock = NSLock()
     /// Flip `updateRules` exactly once so the data provider's `handleRulesChanged()` can be
     /// observed without a rules-change storm.
@@ -39,6 +48,7 @@ final class FilterControlProvider: NEFilterControlProvider {
             policy = PolicySource(path: policyPath)
         }
         observed = ObservedStore()
+        bypass.start(url: SharedContainer.bypassURL)
         PathObserver.shared.start()
         Log.flows.log("""
             CONTROL PROVIDER startFilter ready container=\(SharedContainer.containerURL != nil, privacy: .public) \
@@ -57,6 +67,11 @@ final class FilterControlProvider: NEFilterControlProvider {
 
     override func handleNewFlow(_ flow: NEFilterFlow,
                                 completionHandler: @escaping (NEFilterControlVerdict) -> Void) {
+        if let sourceApp = flow.sourceAppIdentifier, bypass.contains(sourceApp) {
+            completionHandler(.allow(withUpdateRules: false))
+            return
+        }
+
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         runSandboxProbeOnce()
         var record = FlowInspector.record(for: flow, origin: .controlProvider)
@@ -157,6 +172,7 @@ final class FilterControlProvider: NEFilterControlProvider {
             Log.control.log("report without flow event=\(report.event.rawValue, privacy: .public)")
             return
         }
+        if let sourceApp = flow.sourceAppIdentifier, bypass.contains(sourceApp) { return }
         var record = FlowInspector.record(for: flow, origin: .controlProvider)
         record.verdict = .report
         record.bytesInbound = UInt64(report.bytesInboundCount)

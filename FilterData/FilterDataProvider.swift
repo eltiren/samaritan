@@ -31,6 +31,19 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     private var policy: PolicySource?
     private let lock = NSLock()
 
+    /// Apps exempt from Samaritan entirely. Read on the hot path without taking `lock` — see
+    /// `BypassGate`, and `handleNewFlow` below for why it cannot be behind one.
+    ///
+    /// A stored property, unlike `store` and `policy`, because it must answer correctly for the
+    /// very first flow and its initialiser does no I/O: it starts empty and is loaded in
+    /// `startFilter`. An empty set means "bypass nothing", so a failure to load fails towards
+    /// filtering rather than away from it.
+    private let bypass = BypassGate()
+
+    /// Distinct `sourceAppIdentifier` values seen, so each can be logged once with its raw form.
+    /// Not on the bypass path — this is only reached by flows Samaritan is actually inspecting.
+    private var seenIdentifiers = Set<String>()
+
     private var configuration = SpikeConfiguration.default
     private var rules = SpikeRuleSet(configuration: .default)
     private var configurationMTime: TimeInterval = 0
@@ -69,6 +82,7 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         if let policyPath = SharedContainer.policyURL?.path {
             policy = PolicySource(path: policyPath)
         }
+        bypass.start(url: SharedContainer.bypassURL)
         let hasStore = store != nil
         PathObserver.shared.start()
         reloadConfiguration(force: true)
@@ -90,11 +104,28 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     // MARK: - Flows
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
+        // L0 — BYPASS. Deliberately the first statement in the method, before the clock read.
+        //
+        // "Bypass" means the app is invisible to Samaritan, not "allowed after processing": no
+        // metadata is extracted, nothing is written to the ring or the Observed list, no counter
+        // moves, nothing is logged, no configuration is re-read and the sandbox probe is not run.
+        // Anything below this line would be a side effect on a flow we promised not to look at.
+        //
+        // The membership test is against the identifier **exactly as the flow carries it**. See
+        // `docs/firewall-rules.md` §1.3 — matching a bundle ID here would silently never fire.
+        // A `nil` identifier is never bypassed: `AppIdentity.unattributedRaw` is a display-only
+        // pseudo-identifier that no flow carries, so there is nothing to compare against, and
+        // exempting all unattributable traffic is the hole default-deny exists to close.
+        if let sourceApp = flow.sourceAppIdentifier, bypass.contains(sourceApp) {
+            return .allow()
+        }
+
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         runSandboxProbeOnce()
         reloadConfigurationIfStale(now: started)
 
         var record = FlowInspector.record(for: flow, origin: .dataProvider)
+        noteIdentity(of: flow, record: record)
 
         lock.lock()
         let rules = self.rules
@@ -164,6 +195,7 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         Log.data.log("handleRulesChanged — reloading configuration from shared container")
         store?.increment([.rulesChangedEvents: 1])
         reloadConfiguration(force: true)
+        bypass.reload()
     }
 
     /// Delivered for flows whose verdict had `shouldReport = true`.
@@ -333,6 +365,44 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
             reports=\(loaded.requestReports, privacy: .public) \
             deny=\(loaded.denyMode.rawValue, privacy: .public) \
             source=\(mtime > 0 ? "file" : "compiled-in-default", privacy: .public)
+            """)
+    }
+
+    // MARK: - Identity
+
+    /// Logs each distinct `sourceAppIdentifier` once, verbatim.
+    ///
+    /// The point is to see what the flow *actually* carries rather than what the Apps list shows.
+    /// `logEveryFlow` already prints the identifier per flow, but at Netflix volumes that is
+    /// thousands of duplicate lines; the interesting question is how many *distinct* identifiers
+    /// one app produces, and whether any of them is missing, empty, or belongs to a helper process
+    /// or a system daemon rather than to the app itself.
+    ///
+    /// Never reached for a bypassed flow — that has already returned.
+    private func noteIdentity(of flow: NEFilterFlow, record: FlowRecord) {
+        let raw = flow.sourceAppIdentifier
+        // Nil and empty are different failures and print differently: nil means the system did not
+        // attribute the flow at all, empty would mean it attributed it to nothing.
+        let key = raw.map { $0.isEmpty ? "<empty>" : $0 } ?? "<nil>"
+
+        lock.lock()
+        // Capped: an app that mints a new identifier per connection must not grow this without
+        // bound inside a memory-limited extension.
+        let isNew = seenIdentifiers.count < 512 && seenIdentifiers.insert(key).inserted
+        lock.unlock()
+        guard isNew else { return }
+
+        let identity = AppIdentity(sourceAppIdentifier: raw)
+        let team = identity.teamID.isEmpty ? "<empty>" : String(identity.teamID)
+        let bypassed = raw.map { bypass.contains($0) } ?? false
+        Log.flows.log("""
+            IDENT NEW raw=\(key, privacy: .public) \
+            team=\(team, privacy: .public) \
+            bundle=\(String(identity.bundleID), privacy: .public) \
+            apple=\(identity.isAppleSystemApp, privacy: .public) \
+            bypassed=\(bypassed, privacy: .public) \
+            proto=\(record.socketProtocolName, privacy: .public) \
+            host=\(record.remoteHostname.isEmpty ? "<nil>" : record.remoteHostname, privacy: .public)
             """)
     }
 
