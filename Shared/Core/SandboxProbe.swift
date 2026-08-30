@@ -29,6 +29,26 @@ public enum SandboxProbe {
             + "private=\(status("privateContainerWrite")) ifaces=\(status("getifaddrs"))"
     }
 
+    /// Runs the probe now, then again a couple of times shortly after.
+    ///
+    /// `startFilter` fires the moment the filter is enabled, routinely before anyone has attached a
+    /// log stream, so a single line at startup is easy to miss. That used to be solved by running
+    /// the probe lazily on the first flow and decorating the first three flow log lines with the
+    /// result — which cost a lock acquisition on *every* flow, forever, to serve a one-shot
+    /// diagnostic. This does the same job on a background queue at no cost to the flow path.
+    ///
+    /// Re-running rather than re-logging a cached string is also strictly more informative: the
+    /// container is `completeUntilFirstUserAuthentication`, so a probe that runs before the first
+    /// unlock after a reboot can legitimately fail where a later one succeeds.
+    public static func runAndRepeat(after delays: [Int] = [5, 60]) {
+        run()
+        for delay in delays {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(delay)) {
+                run()
+            }
+        }
+    }
+
     @discardableResult
     public static func run() -> [Result] {
         var results: [Result] = []

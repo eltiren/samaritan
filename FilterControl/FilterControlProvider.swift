@@ -38,11 +38,10 @@ final class FilterControlProvider: NEFilterControlProvider {
     /// Flip `updateRules` exactly once so the data provider's `handleRulesChanged()` can be
     /// observed without a rules-change storm.
     private var hasSignalledRulesChange = false
-    private var sandboxProbeRan = false
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         Log.flows.log("CONTROL PROVIDER startFilter entered pid=\(getpid())")
-        SandboxProbe.run()
+        SandboxProbe.runAndRepeat()
         store = DiagnosticsStore(writer: .controlProvider)
         if let policyPath = SharedContainer.policyURL?.path {
             policy = PolicySource(path: policyPath)
@@ -73,7 +72,6 @@ final class FilterControlProvider: NEFilterControlProvider {
         }
 
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        runSandboxProbeOnce()
         var record = FlowInspector.record(for: flow, origin: .controlProvider)
 
         // Paired with the data provider's ESCALATE line by flow id. Both use CLOCK_UPTIME_RAW,
@@ -150,15 +148,6 @@ final class FilterControlProvider: NEFilterControlProvider {
             """)
 
         completionHandler(verdict)
-    }
-
-    private func runSandboxProbeOnce() {
-        lock.lock()
-        let alreadyRan = sandboxProbeRan
-        sandboxProbeRan = true
-        lock.unlock()
-        guard !alreadyRan else { return }
-        DispatchQueue.global(qos: .utility).async { SandboxProbe.run() }
     }
 
     override func handleRemediation(for flow: NEFilterFlow,

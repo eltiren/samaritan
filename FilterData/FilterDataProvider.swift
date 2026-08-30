@@ -1,6 +1,7 @@
 import Foundation
 import NetworkExtension
 import OSLog
+import Synchronization
 
 /// The hot path.
 ///
@@ -47,16 +48,14 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     private var configuration = SpikeConfiguration.default
     private var rules = SpikeRuleSet(configuration: .default)
     private var configurationMTime: TimeInterval = 0
-    private var lastConfigurationCheck: UInt64 = 0
+
+    /// Atomic rather than lock-guarded: this is read on *every* flow purely to decide whether the
+    /// 2-second throttle has elapsed, and taking `lock` for a single word is the kind of cost that
+    /// accretes on a path that runs millions of times a day.
+    private let lastConfigurationCheck = Atomic<UInt64>(0)
 
     /// One `.needRules()` probe per source app, hard-capped, so the control-provider experiment can
     /// never wedge traffic on a personal device.
-    /// The sandbox probe also runs lazily on the first flow. `startFilter` fires the moment the
-    /// filter is enabled — often before you have `log stream` attached — so relying on it alone
-    /// means the answer scrolls past unseen.
-    private var sandboxProbeRan = false
-    private var sandboxSummary = ""
-    private var sandboxSummariesLogged = 0
 
     /// Destinations already escalated, so a retry storm does not pay a cross-process round trip per
     /// attempt. Measured: one blocked app produced 1839 escalations for a handful of destinations.
@@ -75,7 +74,7 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         // Unconditional first line. If this appears and nothing else does, the crash is below.
         Log.flows.log("DATA PROVIDER startFilter entered pid=\(getpid())")
 
-        SandboxProbe.run()
+        SandboxProbe.runAndRepeat()
 
         let hasContainer = SharedContainer.containerURL != nil
         store = DiagnosticsStore(writer: .dataProvider)
@@ -121,16 +120,16 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         }
 
         let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        runSandboxProbeOnce()
         reloadConfigurationIfStale(now: started)
 
         var record = FlowInspector.record(for: flow, origin: .dataProvider)
-        noteIdentity(of: flow, record: record)
 
         lock.lock()
         let rules = self.rules
         let configuration = self.configuration
         lock.unlock()
+
+        if configuration.logIdentities { noteIdentity(of: flow, record: record) }
 
         let verdict: NEFilterNewFlowVerdict
         var counters: [DiagnosticsStore.Counter: UInt64] = [.flowsObserved: 1]
@@ -284,32 +283,6 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         return escalationLedger.insert(key).inserted
     }
 
-    // MARK: - Sandbox probe
-
-    private func runSandboxProbeOnce() {
-        lock.lock()
-        let alreadyRan = sandboxProbeRan
-        sandboxProbeRan = true
-        lock.unlock()
-        guard !alreadyRan else { return }
-        // Off the hot path — this does real filesystem I/O and we only need it once.
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let summary = SandboxProbe.summary(of: SandboxProbe.run())
-            self?.lock.lock()
-            self?.sandboxSummary = summary
-            self?.lock.unlock()
-        }
-    }
-
-    /// Returns the sandbox verdict for the first few flow lines, then stops repeating it.
-    private func sandboxSuffix() -> String {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !sandboxSummary.isEmpty, sandboxSummariesLogged < 3 else { return "" }
-        sandboxSummariesLogged += 1
-        return " sandbox[\(sandboxSummary)]"
-    }
-
     // MARK: - Control probe
 
     private func shouldProbeControl(for sourceApp: String) -> Bool {
@@ -326,12 +299,9 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     // MARK: - Configuration
 
     private func reloadConfigurationIfStale(now: UInt64) {
-        lock.lock()
-        let last = lastConfigurationCheck
-        lock.unlock()
         // Throttled `stat(2)` so app-side config edits land without toggling the filter, while
         // still costing nothing measurable on the hot path.
-        guard now &- last > 2_000_000_000 else { return }
+        guard now &- lastConfigurationCheck.load(ordering: .relaxed) > 2_000_000_000 else { return }
         reloadConfiguration(force: false)
     }
 
@@ -345,8 +315,8 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
             }
         }
 
+        lastConfigurationCheck.store(now, ordering: .relaxed)
         lock.lock()
-        lastConfigurationCheck = now
         let unchanged = !force && mtime == configurationMTime
         lock.unlock()
         guard !unchanged else { return }
@@ -379,7 +349,8 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
     /// one app produces, and whether any of them is missing, empty, or belongs to a helper process
     /// or a system daemon rather than to the app itself.
     ///
-    /// Never reached for a bypassed flow — that has already returned.
+    /// Never reached for a bypassed flow — that has already returned — and skipped entirely
+    /// unless `logIdentities` is on, because the seen-set costs a lock and a string hash per flow.
     private func noteIdentity(of flow: NEFilterFlow, record: FlowRecord) {
         let raw = flow.sourceAppIdentifier
         // Nil and empty are different failures and print differently: nil means the system did not
@@ -423,7 +394,7 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
             path=[\(record.pathFlags.summary, privacy: .public)] \
             rule=\(record.matchedRule.isEmpty ? "-" : record.matchedRule, privacy: .public) \
             id=\(record.flowIdentifier, privacy: .public) \
-            \(record.decisionNanos / 1000)us\(self.sandboxSuffix(), privacy: .public)
+            \(record.decisionNanos / 1000)us
             """)
     }
 

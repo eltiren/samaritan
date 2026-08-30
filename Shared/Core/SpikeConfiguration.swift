@@ -39,6 +39,13 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
     /// Emit an OSLog line per flow in addition to the ring buffer.
     public var logEveryFlow: Bool
 
+    /// Log each distinct `sourceAppIdentifier` once, verbatim (`IDENT NEW`).
+    ///
+    /// A capture instrument, not a resting state: while on, every flow pays a lock and a string
+    /// hash to check whether its identifier has been seen before. Turn it on to answer "what does
+    /// this app actually identify as", read the answer out of the log, then turn it off.
+    public var logIdentities: Bool
+
     /// How a deny is delivered. See `SpikeResolver`.
     public enum DenyMode: String, Codable, Sendable, CaseIterable {
         /// Data provider returns `.drop()` itself. Fastest, but the flow is never recorded anywhere
@@ -66,6 +73,7 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         controlProbeBudget: 32,
         requestReports: true,
         logEveryFlow: true,
+        logIdentities: true,
         denyMode: .inline
     )
 
@@ -76,6 +84,7 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
                 controlProbeBudget: Int,
                 requestReports: Bool,
                 logEveryFlow: Bool,
+                logIdentities: Bool = true,
                 denyMode: DenyMode = .inline) {
         self.blockedHostSuffixes = blockedHostSuffixes
         self.blockedHostSubstrings = blockedHostSubstrings
@@ -84,6 +93,7 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         self.controlProbeBudget = controlProbeBudget
         self.requestReports = requestReports
         self.logEveryFlow = logEveryFlow
+        self.logIdentities = logIdentities
         self.denyMode = denyMode
     }
 
@@ -97,6 +107,8 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
         controlProbeBudget = try container.decode(Int.self, forKey: .controlProbeBudget)
         requestReports = try container.decode(Bool.self, forKey: .requestReports)
         logEveryFlow = try container.decode(Bool.self, forKey: .logEveryFlow)
+        // Absent in configs written before the identity capture existed.
+        logIdentities = try container.decodeIfPresent(Bool.self, forKey: .logIdentities) ?? true
         denyMode = try container.decodeIfPresent(DenyMode.self, forKey: .denyMode) ?? .inline
     }
 

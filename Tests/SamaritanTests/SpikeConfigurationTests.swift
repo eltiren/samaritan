@@ -35,6 +35,10 @@ struct SpikeConfigurationTests {
         let decoded = try JSONDecoder().decode(SpikeConfiguration.self, from: legacy)
         #expect(decoded.blockedHostSubstrings.isEmpty)
         #expect(decoded.blockedHostSuffixes == ["a.test"])
+        // Every field added since must decode to a default rather than throwing, or the providers
+        // silently fall back to the compiled-in configuration on the next launch.
+        #expect(decoded.logIdentities)
+        #expect(decoded.denyMode == .inline)
     }
 
     @Test("the probe budget is bounded so a stuck control provider cannot wedge traffic")

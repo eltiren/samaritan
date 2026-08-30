@@ -79,6 +79,13 @@ the return is a behaviour change, not an instrumentation change.
 The test reads `BypassGate` without taking `lock`, by design: it is one atomic pointer load and one
 `Set` membership test. Do not add a lock, a `stat`, an allocation or an `await` to that path.
 
+The rest of `handleNewFlow` takes `lock` exactly **once**, to read the rules and configuration
+together. Keep it that way. A one-shot diagnostic guarded by a lock-protected `Bool` costs that
+lock on every flow forever, long after the thing it was measuring has been answered — the sandbox
+probe did this for two milestones. Put one-shot work in `startFilter`, per-flow diagnostics behind
+a configuration flag read from the snapshot that lock already returns, and a bare word that only
+needs the latest value in an `Atomic`.
+
 Entries are raw `sourceAppIdentifier` strings (`<teamID>.<bundleID>`), never bundle IDs. Normalising
 them would make every stored bypass stop matching, silently. See `docs/firewall-rules.md` §1.3 and
 §2.0.

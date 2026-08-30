@@ -29,6 +29,7 @@ final class DiagnosticsModel {
                     || configuration.controlProbeEnabled != oldValue.controlProbeEnabled
                     || configuration.requestReports != oldValue.requestReports
                     || configuration.logEveryFlow != oldValue.logEveryFlow
+                    || configuration.logIdentities != oldValue.logIdentities
             else { return }
             saveConfiguration()
         }

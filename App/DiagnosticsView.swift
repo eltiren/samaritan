@@ -272,6 +272,8 @@ struct DiagnosticsView: View {
             Toggle("needRules() probe", isOn: $diagnostics.configuration.controlProbeEnabled)
             Toggle("Request NEFilterReport", isOn: $diagnostics.configuration.requestReports)
             Toggle("Log every flow to OSLog", isOn: $diagnostics.configuration.logEveryFlow)
+            Toggle("Log new app identities (IDENT NEW)",
+                   isOn: $diagnostics.configuration.logIdentities)
 
             Button("Apply") { diagnostics.saveConfiguration() }
             Button("Restore defaults") { diagnostics.resetConfiguration() }
