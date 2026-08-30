@@ -174,6 +174,17 @@ final class FilterControlProvider: NEFilterControlProvider {
             .reportedBytesOutbound: record.bytesOutbound,
         ])
 
+        // The same bytes again, split by app. Not a second measurement — the same one, so a per-app
+        // figure that does not add up to the counter above is a bug in one of them.
+        //
+        // The epoch comes from the ring header, which `append` above has just re-read, and is how a
+        // reset in the app reaches the per-app totals: they are cleared by the same tap that clears
+        // the counters, and never on their own.
+        observed?.addTraffic(appID: record.sourceApp,
+                             inbound: record.bytesInbound,
+                             outbound: record.bytesOutbound,
+                             countersEpoch: store?.countersEpoch ?? 0)
+
         // Reports are the only sight the control provider gets of flows it never handled, so this is
         // where *allowed* destinations are recorded. Without it the app list would only ever show
         // apps that are blocked.

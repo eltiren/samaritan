@@ -349,6 +349,41 @@ write. The provider notices via an 8-byte `pread` of the epoch before each flush
 reset; without that its next flush would put stale counters back over the cleared header and "Reset
 counters" would silently revert on the next flow.
 
+### Per-app bytes are that same counter, split by app
+
+Each app's row and detail screen show what it has received and sent. This is not a second
+measurement: it is fed from the same `flowClosed` reports, in the same place, by the same
+arithmetic, so **the per-app totals must sum to `reportedBytesInbound` / `reportedBytesOutbound`**.
+`Copy diagnostics` prints both sums next to each other for exactly that check. Two things can make
+the per-app sum legitimately smaller, and nothing else should:
+
+- an app evicted by `ObservedStore.maximumApps` (300, least-recently-seen first) takes its totals
+  with it;
+- a **bypassed** app is never inspected, so its bytes are recorded nowhere — by design, and stated
+  on its screen rather than left to look like zero usage.
+
+Do not expect these to match iOS *Settings › Cellular*. Only a **closed** flow reports byte counts,
+so a connection that is still open contributes nothing yet and a long-lived one can read zero for
+hours; and these figures count Wi-Fi as well as cellular.
+
+There is deliberately **no per-app reset**. The per-app totals and the global counters are one
+measurement, and a per-app reset would leave them disagreeing with no way to tell which was wrong.
+
+The reset reaches them over the epoch that already existed. `observed.json` grew an envelope
+(`{version, countersEpoch, apps}`) around what used to be a bare `[appID: ObservedApp]` map, so the
+totals carry the epoch they belong to. `version` is a *required* key on decode — the only thing
+distinguishing the envelope from a legacy map, which would otherwise decode as an empty envelope and
+wipe the history it was meant to preserve. Both writers then clear independently and converge:
+
+- the **app** zeroes the totals in place when you tap *Reset counters*, which is what makes the
+  reset visible immediately and the only thing that works while the filter is off;
+- the **control provider** reads the new epoch out of the ring header on its next report and zeroes
+  its own copy, so a flush that was already in flight cannot put stale totals back.
+
+Persisting the epoch is what makes that idempotent across a restart. Without it a provider could not
+tell "the app reset while I was not running" from "these totals are mine", and would either re-zero
+on every launch or never notice a reset at all.
+
 ## The experiment
 
 ### Step 1 — does the filter work at all?

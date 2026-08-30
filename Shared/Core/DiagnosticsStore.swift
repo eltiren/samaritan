@@ -137,6 +137,20 @@ public final class DiagnosticsStore {
         if descriptor >= 0 { close(descriptor) }
     }
 
+    // MARK: - Epoch
+
+    /// The epoch the current counters belong to, as this process last saw it. Unix seconds; 0 when
+    /// the ring predates the field.
+    ///
+    /// `append` and `increment` re-read it from the header, so a caller that has just written is
+    /// reading a current value. The control provider hands it to `ObservedStore` so the per-app byte
+    /// totals — the same measurement, split by app — are cleared by the same reset.
+    public var countersEpoch: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return epochSeconds
+    }
+
     // MARK: - Writing
 
     /// Appends one record and applies counter deltas atomically with respect to other calls in

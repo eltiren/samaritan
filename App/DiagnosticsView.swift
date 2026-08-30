@@ -181,7 +181,9 @@ struct DiagnosticsView: View {
                  + "cleared by Reset counters.\n\nA report event is not a flow: iOS delivers one at "
                  + "newFlow and one at flowClosed, so a closed flow contributes two. Only the "
                  + "flowClosed event carries byte counts, so each flow's bytes are added exactly "
-                 + "once.")
+                 + "once.\n\nThe two byte figures are broken down per app on the Apps tab, from the "
+                 + "same reports. Resetting here resets those too — they are one measurement and "
+                 + "have to stay comparable.")
         }
         .confirmationDialog("Reset counters?", isPresented: $isConfirmingReset,
                             titleVisibility: .visible) {
@@ -192,8 +194,8 @@ struct DiagnosticsView: View {
             // window, and resetting throws that window away — a measurement that took a day and a
             // half to accumulate cannot be recovered.
             Text("\(diagnostics.countingDurationLabel) of measurement will be lost. This clears "
-                 + "every counter and the recorded flows in both rings, and restarts the counting "
-                 + "window from now.")
+                 + "every counter, every app's received/sent totals and the recorded flows in both "
+                 + "rings, and restarts the counting window from now.")
         }
     }
 

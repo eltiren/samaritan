@@ -90,6 +90,22 @@ Entries are raw `sourceAppIdentifier` strings (`<teamID>.<bundleID>`), never bun
 them would make every stored bypass stop matching, silently. See `docs/firewall-rules.md` §1.3 and
 §2.0.
 
+## Rule 3d: a new field on a persisted type needs a hand-written decoder
+
+Swift's synthesised `Codable` **ignores property default values** and throws `keyNotFound`. Adding a
+non-optional field to a type that is already written to disk therefore makes every existing file
+undecodable — and every one of these stores swallows a decode failure and carries on with empty
+state, so the symptom is not an error but silently erased user data.
+
+Any field added to `AppPolicy`, `ObservedApp`, `SpikeConfiguration`, `BypassList` or anything else
+that reaches the App Group container needs an explicit `init(from:)` using `decodeIfPresent`, plus a
+test that decodes a document written before the field existed. Every type here that has grown a field
+— `SpikeConfiguration`, `AppPolicy`, `ObservedApp` — needed one, and none of them failed loudly.
+
+The mirror image applies to a file whose *shape* changes: `observed.json` gained an envelope, and its
+`version` key is deliberately **required** on decode, because a wrapper of all-optional keys happily
+decodes a legacy payload as an empty wrapper.
+
 ## Rule 4: this is a spike
 
 Milestone 1 proves NetworkExtension behaves on a real device. Do not build the CIDR/policy engine,

@@ -109,8 +109,18 @@ final class DiagnosticsModel {
         interfaces = NetworkInterfaces.current().filter { $0.isUp }
     }
 
+    /// Clears every counter, in both rings and per app.
+    ///
+    /// Per-app byte totals are the same measurement as `reportedBytes*`, split by app, so they are
+    /// reset by this one action and never on their own — a per-app reset would leave the two
+    /// disagreeing with no way to tell which was wrong.
+    ///
+    /// The control provider clears its own copy independently, when it next sees the new epoch in
+    /// the ring header. Writing it here too is what makes the reset show up straight away, and the
+    /// only thing that makes it work at all while the filter is off and no provider is running.
     func resetCounters() {
         for store in stores.values { store.reset() }
+        observed?.resetTraffic(countersEpoch: stores[.controlProvider]?.countersEpoch ?? 0)
         probeResults.removeAll()
         refresh()
     }
@@ -298,6 +308,18 @@ final class DiagnosticsModel {
         for counter in DiagnosticsStore.Counter.allCases {
             lines.append("\(counter) = \(snapshot[counter])")
         }
+        lines.append("")
+        lines.append("## Per-app traffic (bytes since the epoch above)")
+        let ranked = observedApps.sorted { $0.bytesInbound + $0.bytesOutbound > $1.bytesInbound + $1.bytesOutbound }
+        for app in ranked where app.bytesInbound + app.bytesOutbound > 0 {
+            lines.append("in=\(app.bytesInbound) out=\(app.bytesOutbound) \(app.appID)")
+        }
+        // The two totals below come from the same reports by the same arithmetic, so a gap is
+        // either eviction (`ObservedStore.maximumApps`) or a bug — worth having in the paste.
+        lines.append("per-app sum: in=\(observedApps.reduce(0) { $0 + $1.bytesInbound }) "
+                     + "out=\(observedApps.reduce(0) { $0 + $1.bytesOutbound })")
+        lines.append("counters:    in=\(snapshot[.reportedBytesInbound]) "
+                     + "out=\(snapshot[.reportedBytesOutbound])")
         lines.append("")
         lines.append("## Interfaces")
         for interface in interfaces {

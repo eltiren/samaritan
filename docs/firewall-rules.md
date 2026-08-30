@@ -525,7 +525,9 @@ Measured working in milestone 1, and unchanged by this spec: [DERIVED]
 ### 7.1 App list
 
 Apps that have initiated any network activity, most recent first. Each row: identity, counts of
-allowed / denied / observed-pending, last activity.
+allowed / denied / observed-pending, last activity, and — trailing, in the *Settings › Cellular*
+idiom — the bytes that app has received and sent. A bypassed row shows no traffic figure at all
+rather than a stale one, for the same reason its counts are replaced.
 
 **App icons and display names are not obtainable through any public iOS API.** [DERIVED]
 
@@ -545,7 +547,15 @@ apply. Constraints on how it is used: [PROPOSED]
 
 ### 7.2 App screen
 
-Top to bottom: [STATED, plus bypass]
+Top to bottom: [STATED, plus bypass and traffic]
+
+**Traffic** — unnumbered, above the toggles. Received and sent, plus the counting window they
+belong to. This is the global `reportedBytes*` counter split by app, not a second measurement, so it
+must sum back to it; the footer says where the figure comes from, because it will look low against
+*Settings › Cellular* (only a **closed** flow reports byte counts) and because a bypassed app's real
+usage is unknowable rather than zero. There is **no per-app reset** — the totals and the counter are
+one measurement and have to stay comparable, so *Reset counters* in Settings clears every app at
+once.
 
 0. **Bypass all filters** — toggle, in its own section above everything else. Off by default and
    never offered for `<unattributed>`. While on: the Allow-all toggle is disabled (it is moot), the

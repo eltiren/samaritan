@@ -40,8 +40,49 @@ struct AppDetailView: View {
             .sorted { $0.lastSeen > $1.lastSeen }
     }
 
+    /// What this app has moved, or zero when nothing has been recorded for it yet.
+    private var traffic: (inbound: UInt64, outbound: UInt64) {
+        let app = diagnostics.observedApp(appID)
+        return (app?.bytesInbound ?? 0, app?.bytesOutbound ?? 0)
+    }
+
     var body: some View {
         List {
+            Section {
+                LabeledContent("Received") {
+                    Text(DiagnosticsModel.bytes(traffic.inbound)).monospacedDigit()
+                }
+                LabeledContent("Sent") {
+                    Text(DiagnosticsModel.bytes(traffic.outbound)).monospacedDigit()
+                }
+                LabeledContent("Counting since") {
+                    Text(diagnostics.countingWindowLabel)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            } header: {
+                Text("Traffic")
+            } footer: {
+                if isBypassed {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Frozen at what this app had moved before bypass was switched on.")
+                            .foregroundStyle(Theme.warning)
+                        Text("A bypassed flow is allowed before anything is inspected, so no bytes "
+                             + "are attributed to it and this app's real usage is now unknown.")
+                    }
+                } else {
+                    // Someone comparing this against Settings > Cellular will find it low, and the
+                    // reason is not obvious: iOS reports a flow's byte counts once, when the flow
+                    // closes. Say so here rather than let the gap look like a bug.
+                    Text("This app's share of Reported bytes in/out in Settings, counted from "
+                         + "closed flows only — iOS reports a connection's byte totals when it "
+                         + "ends, so one that is still open contributes nothing yet, and a "
+                         + "long-lived one can read zero for hours.\n\nCleared for every app at "
+                         + "once by Reset counters in Settings; there is no per-app reset, because "
+                         + "these totals and that counter have to stay comparable.")
+                }
+            }
+            .icebergRows()
+
             Section {
                 Toggle("Bypass all filters", isOn: Binding(
                     get: { isBypassed },

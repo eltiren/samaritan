@@ -27,7 +27,8 @@ struct AppListView: View {
                                blanket: policy.document[app.appID]?.blanket,
                                bypassed: policy.document[app.appID]?.bypass ?? false,
                                allowed: app.allowedCount, denied: app.deniedCount,
-                               pending: app.destinations.values.filter(\.denied).count)
+                               pending: app.destinations.values.filter(\.denied).count,
+                               bytesInbound: app.bytesInbound, bytesOutbound: app.bytesOutbound)
                     }
                 }
                 ForEach(quiet, id: \.self) { appID in
@@ -36,15 +37,21 @@ struct AppListView: View {
                     } label: {
                         AppRow(appID: appID, blanket: policy.document[appID]?.blanket,
                                bypassed: policy.document[appID]?.bypass ?? false,
-                               allowed: 0, denied: 0, pending: 0)
+                               allowed: 0, denied: 0, pending: 0,
+                               bytesInbound: 0, bytesOutbound: 0)
                     }
                 }
             } header: {
                 Text("Apps")
             } footer: {
-                Text("Per-app history is bounded at \(ObservedStore.maximumDestinationsPerApp) "
-                     + "destinations each, evicting least-recently-seen, so a noisy app cannot "
-                     + "crowd out a quiet one.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Per-app history is bounded at \(ObservedStore.maximumDestinationsPerApp) "
+                         + "destinations each, evicting least-recently-seen, so a noisy app cannot "
+                         + "crowd out a quiet one.")
+                    Text("↓ received and ↑ sent are totals since the counting window began, from "
+                         + "closed flows only. They are cleared for every app at once by Reset "
+                         + "counters in Settings.")
+                }
             }
             .icebergRows()
         }
@@ -64,8 +71,11 @@ struct AppRow: View {
     let allowed: Int
     let denied: Int
     let pending: Int
+    let bytesInbound: UInt64
+    let bytesOutbound: UInt64
 
     private var identity: AppIdentity { AppIdentity(raw: appID) }
+    private var hasTraffic: Bool { bytesInbound > 0 || bytesOutbound > 0 }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -106,6 +116,18 @@ struct AppRow: View {
                     }
                 }
                 .font(.caption2)
+            }
+            if hasTraffic, !bypassed {
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("↓ \(DiagnosticsModel.bytes(bytesInbound))")
+                    Text("↑ \(DiagnosticsModel.bytes(bytesOutbound))")
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .font(.caption2)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
