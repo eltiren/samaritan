@@ -87,12 +87,16 @@ correct — they really are different binaries — but it is also the most likel
 like it is not working, so the app screen lists an app's sibling identifiers explicitly rather than
 merging them (§7.2).
 
-**Open, and only answerable on device:** whether media playback in a large streaming app is
-attributed to the app itself or to a system media daemon. If playback runs through, say,
-`.com.apple.mediaplaybackd`, then bypassing the app's own identifier will not exempt the traffic
-that matters, and the daemon's identifier has to be bypassed too — with the obvious consequence that
-it is shared with every other app that plays media. The `IDENT NEW` log line in
-`FilterDataProvider` exists to answer exactly this; see the capture procedure in `README.md`.
+The open worry was that media playback might be attributed to a system daemon rather than to the
+streaming app — if playback ran through, say, `.com.apple.mediaplaybackd`, bypassing the app's own
+identifier would not exempt the traffic that matters, and bypassing the daemon would exempt it for
+every app on the device. **Measured: it is not.** Bypassing a streaming app from its own row in the
+Apps list restores playback. [DEVICE]
+
+What remains open is narrower: whether one identifier is enough for such an app, or whether its
+extensions and helpers need bypassing too. That is a per-app fact rather than a platform one, which
+is why the app screen lists siblings instead of guessing (§7.2). The `IDENT NEW` line in
+`FilterDataProvider` reports it; see the capture procedure in `README.md`.
 
 ---
 

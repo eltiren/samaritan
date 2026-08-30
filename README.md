@@ -707,6 +707,26 @@ reclaiming one safely needs a quiescence protocol that would cost the hot path e
 design exists to avoid. Growth is bounded from the other end instead: an unchanged set is not
 republished, so the timer costs nothing, and each snapshot is a handful of short strings.
 
+### Confirmed on device
+
+Netflix playback — which default-deny was breaking — works with bypass on. [DEVICE]
+
+That is the whole path exercised by real traffic, and it settles three things that could only be
+guessed at off-device:
+
+- The L0 early return reaches production flows and genuinely exempts them. Playback is high-volume
+  and latency-sensitive, so a bypass that only *mostly* fired would have shown up as stalling rather
+  than as success.
+- **`bypass.json` is readable from inside the `NEFilterDataProvider` sandbox, and the published set
+  arrives.** Not a given: that process cannot write anywhere at all, and `getifaddrs` returns zero
+  addresses there, so its read access to the App Group is the only channel this design has.
+- Playback traffic is attributed to identifiers the Apps list actually offers — it is not routed
+  exclusively through a system media daemon shared with every other app, which was the failure mode
+  §1.3 flagged as the reason a bypass might look correct and do nothing.
+
+Still worth pinning from a capture: whether one identifier sufficed or the siblings had to be
+bypassed too. `grep "IDENT NEW" ~/device.log` answers it.
+
 ### ⚠️ A bypass keyed on a bundle ID silently never fires
 
 `sourceAppIdentifier` is `<teamID>.<bundleID>` — a signing identifier, not a bundle ID (§1.3). The
