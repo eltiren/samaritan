@@ -311,6 +311,44 @@ because *which* process iOS calls on current iOS is **[DEVICE]**.
 
 ---
 
+### ⚠️ A report event is not a flow, and byte counters have exactly one owner
+
+Measured against the iOS 26.5 SDK headers and a device capture of 149 reports over 120 flows:
+
+- iOS delivers only two of the four `NEFilterReport.Event` cases: `newFlow` (1) and `flowClosed`
+  (3). `dataDecision` never appeared; `statistics` is macOS-only. [SDK] [DEVICE]
+- **Only `flowClosed` carries byte counts.** The header is explicit — `bytesInboundCount` "is only
+  non-zero when the report event is `NEFilterReportEventFlowClosed` or
+  `NEFilterReportEventFlowStatistics`" — and the capture agrees: of 120 flows, event 3 was the only
+  one ever carrying non-zero bytes, and **no flow carried bytes more than once**. [SDK] [DEVICE]
+
+So a closed flow produces two report events, and summing `bytesInboundCount` across reports adds
+each flow's total exactly once. That is a sum of per-flow deltas, not of running totals.
+
+The trap is elsewhere. **Both providers receive the same report for the same flow**, and the app
+sums counters across the two rings, so any counter incremented from `handle(_:)` in both processes
+double-counts. The byte counters are therefore incremented in the control provider alone — which is
+also the only process that can write. `reportsData` and `reportsControl` stay separate for the same
+reason. This was live but masked: the data provider's ring is all zeros because it cannot write, so
+the displayed byte totals were single-counted by accident rather than by design.
+
+Two consequences for reading the numbers:
+
+- "Report events" is roughly **2 × flows**, not flows.
+- The totals cover **every flow on the device** — system daemons, push, iCloud — not just the apps
+  in the list, and they count Wi-Fi as well as cellular, so they will not match a carrier figure.
+
+### Counters carry an epoch
+
+A total nobody can check is indistinguishable from an accounting bug, so the ring header records
+when its counters started (in what was a reserved word, so the layout is unchanged and an older ring
+reads 0 = unknown). The UI shows *Counting since …* and a per-hour rate beside each byte counter.
+
+Resetting is the one place the single-writer rule is broken — the app clears a ring it does not
+write. The provider notices via an 8-byte `pread` of the epoch before each flush and adopts the
+reset; without that its next flush would put stale counters back over the cleared header and "Reset
+counters" would silently revert on the next flow.
+
 ## The experiment
 
 ### Step 1 — does the filter work at all?

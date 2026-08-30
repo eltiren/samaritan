@@ -212,11 +212,12 @@ final class FilterDataProvider: NEFilterDataProvider, @unchecked Sendable {
         record.bytesOutbound = UInt64(report.bytesOutboundCount)
         record.matchedRule = "event:\(reportEventName(report.event)) action:\(filterActionName(report.action))"
 
-        store?.append(record, incrementing: [
-            .reportsData: 1,
-            .reportedBytesInbound: record.bytesInbound,
-            .reportedBytesOutbound: record.bytesOutbound,
-        ])
+        // Deliberately no byte counters here. Both providers receive a report for the *same*
+        // flow, and the app sums counters across the two rings, so incrementing bytes in both
+        // double-counts every byte on the device. The control provider owns that total — it is
+        // also the only process that can actually write. `reportsData` stays, because "did this
+        // process receive the report at all" is per-process and is the milestone-1 finding.
+        store?.append(record, incrementing: [.reportsData: 1])
 
         Log.flows.log("""
             REPORT[data] id=\(record.flowIdentifier, privacy: .public) \

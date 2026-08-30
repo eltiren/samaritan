@@ -248,6 +248,31 @@ final class DiagnosticsModel {
         refresh()
     }
 
+    /// "6 Aug 14:02 (30.2 h)", or a prompt when the ring predates the epoch field.
+    var countingWindowLabel: String {
+        guard let since = snapshot.countersSince else {
+            return "unknown — reset counters to start measuring"
+        }
+        let hours = Date().timeIntervalSince(since) / 3600
+        let stamp = since.formatted(date: .abbreviated, time: .shortened)
+        return hours < 1 ? "\(stamp) (\(Int(hours * 60)) min)"
+                         : String(format: "%@ (%.1f h)", stamp, hours)
+    }
+
+    /// Just the span, for a sentence that already says what is being discarded.
+    var countingDurationLabel: String {
+        guard let seconds = snapshot.countingInterval else { return "An unknown amount" }
+        let hours = seconds / 3600
+        return hours < 1 ? "\(Int(seconds / 60)) minutes"
+                         : String(format: "%.1f hours", hours)
+    }
+
+    /// Byte counters reach the tens of gigabytes, where a raw digit string cannot be read at a
+    /// glance or checked against anything.
+    static func bytes(_ value: UInt64) -> String {
+        ByteCountFormatStyle(style: .file).format(Int64(clamping: value))
+    }
+
     private static func ms(since date: Date) -> String {
         String(format: "%.0fms", Date().timeIntervalSince(date) * 1000)
     }
@@ -267,6 +292,8 @@ final class DiagnosticsModel {
         }
         lines.append("")
         lines.append("## Counters")
+        lines.append("counting since \(snapshot.countersSince?.formatted(.iso8601) ?? "unknown") "
+                     + "(\(countingDurationLabel))")
         for counter in DiagnosticsStore.Counter.allCases {
             lines.append("\(counter) = \(snapshot[counter])")
         }

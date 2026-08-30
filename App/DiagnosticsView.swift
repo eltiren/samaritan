@@ -9,6 +9,7 @@ struct DiagnosticsView: View {
     @Bindable var policy: PolicyStore
 
     @State private var showingExport = false
+    @State private var isConfirmingReset = false
 
     var body: some View {
         NavigationStack {
@@ -37,7 +38,6 @@ struct DiagnosticsView: View {
                         Button("Copy diagnostics") {
                             UIPasteboard.general.string = diagnostics.diagnosticsText()
                         }
-                        Button("Reset counters", role: .destructive) { diagnostics.resetCounters() }
                         Button("Clear observed history", role: .destructive) { diagnostics.clearObserved() }
                         Button("Remove filter configuration", role: .destructive) {
                             Task { await filter.removeConfiguration() }
@@ -151,27 +151,74 @@ struct DiagnosticsView: View {
     }
 
     private var countersSection: some View {
-        Section("Counters") {
+        Section {
+            LabeledContent("Counting since") {
+                Text(diagnostics.countingWindowLabel)
+                    .foregroundStyle(Theme.textSecondary)
+            }
             counter("Flows observed", .flowsObserved)
             counter("Allowed", .flowsAllowed)
             counter("Dropped", .flowsDropped)
             counter("needRules answered", .flowsNeedRules)
             counter("Control provider invoked", .controlFlowsHandled)
-            counter("Reports → data provider", .reportsData)
-            counter("Reports → control provider", .reportsControl)
-            counter("Reported bytes in", .reportedBytesInbound)
-            counter("Reported bytes out", .reportedBytesOutbound)
+            counter("Report events → data provider", .reportsData)
+            counter("Report events → control provider", .reportsControl)
+            byteCounter("Reported bytes in", .reportedBytesInbound)
+            byteCounter("Reported bytes out", .reportedBytesOutbound)
             counter("handleRulesChanged", .rulesChangedEvents)
             counter("Filter starts", .filterStarts)
             counter("Filter stops", .filterStops)
             counter("Ring write failures", .writeFailures)
             counter("Policy decisions", .policyDecisions)
             counter("Spike fallback decisions", .spikeFallbackDecisions)
+
+            Button("Reset counters", role: .destructive) { isConfirmingReset = true }
+        } header: {
+            Text("Counters")
+        } footer: {
+            Text("Totals since the epoch above, across every flow on the device — system daemons "
+                 + "included, not just the apps listed. They survive filter restarts and are only "
+                 + "cleared by Reset counters.\n\nA report event is not a flow: iOS delivers one at "
+                 + "newFlow and one at flowClosed, so a closed flow contributes two. Only the "
+                 + "flowClosed event carries byte counts, so each flow's bytes are added exactly "
+                 + "once.")
+        }
+        .confirmationDialog("Reset counters?", isPresented: $isConfirmingReset,
+                            titleVisibility: .visible) {
+            Button("Reset", role: .destructive) { diagnostics.resetCounters() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Worth a tap to confirm: the counters are only meaningful as a rate over their
+            // window, and resetting throws that window away — a measurement that took a day and a
+            // half to accumulate cannot be recovered.
+            Text("\(diagnostics.countingDurationLabel) of measurement will be lost. This clears "
+                 + "every counter and the recorded flows in both rings, and restarts the counting "
+                 + "window from now.")
         }
     }
 
     private func counter(_ title: String, _ counter: DiagnosticsStore.Counter) -> some View {
-        LabeledContent(title, value: String(diagnostics.snapshot[counter]))
+        LabeledContent(title, value: diagnostics.snapshot[counter].formatted(.number))
+    }
+
+    /// Bytes three ways: a size to read at a glance, the exact grouped count, and the rate. A total
+    /// on its own cannot be sanity-checked; a rate can be held against what the device plausibly
+    /// moves in an hour.
+    private func byteCounter(_ title: String, _ counter: DiagnosticsStore.Counter) -> some View {
+        let value = diagnostics.snapshot[counter]
+        return LabeledContent(title) {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(DiagnosticsModel.bytes(value))
+                Text(rateSuffix(counter).map { "\(value.formatted(.number))  ·  \($0)" }
+                     ?? value.formatted(.number))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private func rateSuffix(_ counter: DiagnosticsStore.Counter) -> String? {
+        diagnostics.snapshot.perHour(counter).map { "\(DiagnosticsModel.bytes(UInt64($0)))/h" }
     }
 
     private var probeSection: some View {

@@ -44,13 +44,33 @@ public final class DiagnosticsStore {
         public var records: [FlowRecord] = []
         public var totalWritten: UInt64 = 0
 
+        /// When these counters started, or `nil` for a ring written before the epoch existed.
+        ///
+        /// Without this a total is unfalsifiable: "8.5 GB" cannot be checked against anything, and
+        /// the obvious question — is that a real 30 hours of traffic or an accounting bug? — has no
+        /// answer. With it, every total divides into a rate that can be sanity-checked.
+        public var countersSince: Date?
+
         public subscript(counter: Counter) -> UInt64 { counters[counter] ?? 0 }
+
+        /// Seconds the counters have been accumulating, or `nil` if the epoch is unknown.
+        public var countingInterval: TimeInterval? {
+            countersSince.map { max(1, Date().timeIntervalSince($0)) }
+        }
+
+        /// A counter as a per-hour rate, for comparing against a plausible figure.
+        public func perHour(_ counter: Counter) -> Double? {
+            countingInterval.map { Double(self[counter]) / $0 * 3600 }
+        }
     }
 
     private static let magic: UInt32 = 0x53_4D_52_54 // "SMRT"
     private static let version: UInt32 = 1
     private static let headerSize = 4096
     private static let counterBase = 32
+    /// Byte offset of `Header.epochSeconds`, derived rather than written down so it cannot drift
+    /// away from the struct if a field is ever inserted above it.
+    private static let epochOffset = MemoryLayout<Header>.offset(of: \Header.epochSeconds) ?? 24
 
     public static let defaultSlotCount = 2048
 
@@ -60,6 +80,7 @@ public final class DiagnosticsStore {
     private let lock = NSLock()
     private var nextSequence: UInt64 = 1
     private var counters = [UInt64](repeating: 0, count: Counter.allCases.count)
+    private var epochSeconds: UInt64 = 0
     /// Reusable scratch so the hot path allocates nothing per flow.
     private let scratch: UnsafeMutableRawBufferPointer
 
@@ -91,6 +112,7 @@ public final class DiagnosticsStore {
         if read == MemoryLayout<Header>.size, header.magic == Self.magic,
            header.version == Self.version, header.slotCount == UInt32(slotCount) {
             nextSequence = max(1, header.nextSequence)
+            epochSeconds = header.epochSeconds
             withUnsafeBytes(of: header.counters) { raw in
                 for i in 0..<min(counters.count, Header.counterSlots) {
                     counters[i] = raw.loadUnaligned(fromByteOffset: i * 8, as: UInt64.self)
@@ -103,6 +125,7 @@ public final class DiagnosticsStore {
             ftruncate(fd, expectedSize)
             nextSequence = 1
             counters = .init(repeating: 0, count: Counter.allCases.count)
+            epochSeconds = UInt64(Date().timeIntervalSince1970)
             flushHeaderLocked()
         }
         ftruncate(fd, expectedSize)
@@ -121,6 +144,7 @@ public final class DiagnosticsStore {
     public func append(_ record: FlowRecord, incrementing deltas: [Counter: UInt64] = [:]) {
         lock.lock()
         defer { lock.unlock() }
+        adoptExternalResetLocked()
 
         let sequence = nextSequence
         nextSequence &+= 1
@@ -142,8 +166,28 @@ public final class DiagnosticsStore {
     public func increment(_ deltas: [Counter: UInt64]) {
         lock.lock()
         defer { lock.unlock() }
+        adoptExternalResetLocked()
         for (counter, delta) in deltas { counters[counter.rawValue] &+= delta }
         flushHeaderLocked()
+    }
+
+    /// Notices a reset performed by the app in another process, and adopts it.
+    ///
+    /// Resetting is the one place the single-writer rule is broken: the app clears a ring it does
+    /// not write to. Without this the provider's next flush would put its stale in-memory counters
+    /// straight back over the cleared header, so "Reset counters" would appear to work and then
+    /// silently revert on the very next flow — which is worse than not offering it.
+    ///
+    /// An 8-byte `pread` against the ~288-byte `pwrite` that follows it, so the cost is noise, and
+    /// the epoch is the natural token: it changes on exactly the two events that invalidate a
+    /// process's cached counters, a reset and a fresh file.
+    private func adoptExternalResetLocked() {
+        var epoch: UInt64 = 0
+        guard pread(descriptor, &epoch, 8, off_t(Self.epochOffset)) == 8,
+              epoch != epochSeconds else { return }
+        epochSeconds = epoch
+        counters = .init(repeating: 0, count: Counter.allCases.count)
+        nextSequence = 1
     }
 
     private func flushHeaderLocked() {
@@ -153,6 +197,7 @@ public final class DiagnosticsStore {
         header.slotSize = UInt32(FlowRecordCodec.slotSize)
         header.slotCount = UInt32(slotCount)
         header.nextSequence = nextSequence
+        header.epochSeconds = epochSeconds
         withUnsafeMutableBytes(of: &header.counters) { raw in
             for i in 0..<min(counters.count, Header.counterSlots) {
                 raw.storeBytes(of: counters[i], toByteOffset: i * 8, as: UInt64.self)
@@ -174,6 +219,9 @@ public final class DiagnosticsStore {
               header.magic == Self.magic else { return snapshot }
 
         snapshot.totalWritten = header.nextSequence &- 1
+        if header.epochSeconds > 0 {
+            snapshot.countersSince = Date(timeIntervalSince1970: TimeInterval(header.epochSeconds))
+        }
         withUnsafeBytes(of: header.counters) { raw in
             for counter in Counter.allCases where counter.rawValue < Header.counterSlots {
                 snapshot.counters[counter] = raw.loadUnaligned(fromByteOffset: counter.rawValue * 8, as: UInt64.self)
@@ -215,6 +263,7 @@ public final class DiagnosticsStore {
         ftruncate(descriptor, off_t(Self.headerSize + slotCount * FlowRecordCodec.slotSize))
         nextSequence = 1
         counters = .init(repeating: 0, count: Counter.allCases.count)
+        epochSeconds = UInt64(Date().timeIntervalSince1970)
         flushHeaderLocked()
     }
 
@@ -228,7 +277,9 @@ public final class DiagnosticsStore {
         var slotSize: UInt32 = 0
         var slotCount: UInt32 = 0
         var nextSequence: UInt64 = 0
-        var reserved: UInt64 = 0
+        /// Unix seconds when the counters started. Occupies what used to be a reserved word, so the
+        /// header layout is unchanged and an older ring simply reads 0 — meaning "unknown".
+        var epochSeconds: UInt64 = 0
         // 32 × UInt64 counter slots. Fixed-size tuple so `Header` stays a C-layout POD.
         var counters: (
             UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64,
@@ -242,12 +293,22 @@ public final class DiagnosticsStore {
 
 extension DiagnosticsStore.Snapshot {
     /// Merges another writer's snapshot: counters sum, records interleave newest-first by time.
+    ///
+    /// **Summing is only correct for a counter one writer owns.** Both providers receive the same
+    /// `NEFilterReport` stream, so a counter incremented from `handle(_:)` in both would be added
+    /// twice here for a single flow. That is why the byte counters are incremented in the control
+    /// provider alone, and why `reportsData` / `reportsControl` are separate counters rather than
+    /// one shared "reports" counter. Anything added to `handle(_:)` in future must pick one owner.
     public func merged(with other: Self) -> Self {
         var result = Self()
         result.totalWritten = totalWritten &+ other.totalWritten
         for counter in DiagnosticsStore.Counter.allCases {
             result.counters[counter] = self[counter] &+ other[counter]
         }
+        // The merged totals only span as far back as the *younger* ring: the older one's extra
+        // history is not represented in the other's counters, so quoting the earlier epoch would
+        // understate every rate.
+        result.countersSince = [countersSince, other.countersSince].compactMap { $0 }.max()
         result.records = (records + other.records).sorted { $0.timestamp > $1.timestamp }
         return result
     }
