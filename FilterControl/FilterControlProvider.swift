@@ -34,10 +34,11 @@ final class FilterControlProvider: NEFilterControlProvider {
     /// while a flow is already in flight, which would otherwise append one more entry to the
     /// Observed list of an app that is supposed to have stopped updating.
     private let bypass = BypassGate()
-    private let lock = NSLock()
+
     /// Flip `updateRules` exactly once so the data provider's `handleRulesChanged()` can be
-    /// observed without a rules-change storm.
-    private var hasSignalledRulesChange = false
+    /// observed without a rules-change storm. Spent on the first *allowed* control flow, not the
+    /// first control flow — see `RulesChangeSignal` for why that distinction is the whole point.
+    private let rulesChange = RulesChangeSignal()
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         Log.flows.log("CONTROL PROVIDER startFilter entered pid=\(getpid())")
@@ -81,11 +82,6 @@ final class FilterControlProvider: NEFilterControlProvider {
         let configuration = SpikeConfiguration.load()
         let rules = SpikeRuleSet(configuration: configuration)
 
-        lock.lock()
-        let signalRulesChange = !hasSignalledRulesChange
-        hasSignalledRulesChange = true
-        lock.unlock()
-
         let verdict: NEFilterControlVerdict
         var counters: [DiagnosticsStore.Counter: UInt64] = [.controlFlowsHandled: 1]
 
@@ -101,6 +97,10 @@ final class FilterControlProvider: NEFilterControlProvider {
         } else {
             denialLabel = rules.matchLabel(hostname: record.remoteHostname, address: record.remoteAddress)
         }
+
+        // Passed the verdict rather than claimed unconditionally: a drop returns
+        // `withUpdateRules: false`, so spending the one-shot on one would silence every later allow.
+        let signalRulesChange = rulesChange.claim(forAllow: denialLabel == nil)
 
         if let label = denialLabel {
             record.verdict = .controlDrop
