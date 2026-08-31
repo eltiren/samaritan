@@ -120,7 +120,7 @@ final class DiagnosticsModel {
     /// only thing that makes it work at all while the filter is off and no provider is running.
     func resetCounters() {
         for store in stores.values { store.reset() }
-        observed?.resetTraffic(countersEpoch: stores[.controlProvider]?.countersEpoch ?? 0)
+        observed?.resetTraffic(countersEpoch: stores[.controlProvider]?.countersGeneration ?? 0)
         probeResults.removeAll()
         refresh()
     }
