@@ -830,6 +830,14 @@ introduced it. What to look for:
 
 - **more than one identifier per app** — extensions and helper processes have their own bundle IDs;
   each needs its own bypass. The app screen lists siblings for this reason.
+- **the same bundle ID under two different teams** — `[DEVICE]` NordVPN produced both
+  `W5W395V82Y.com.nordvpn.NordVPN` (its own traffic: `nc-mqtt.nordvpn.com`, `napps-1.com`,
+  `firebaseremoteconfig.googleapis.com`) and `.com.nordvpn.NordVPN` — the empty team of a platform
+  binary — carrying only `mzstorekit.itunes.apple.com`. `[DERIVED]` a flow a *system framework*
+  makes on an app's behalf is attributed to the app's bundle ID but signed by the platform, so the
+  team half comes back empty. Two rows, one app, and until they were labelled they rendered
+  identically because a row shows the bundle ID. They are still separate policy targets: bypassing
+  the app does not exempt its purchase traffic.
 - **an identifier that is not the app at all** — if media playback is attributed to a system daemon,
   bypassing the app will not exempt the traffic that matters, and bypassing the daemon exempts it
   for every app on the device. Open question; see §1.3.

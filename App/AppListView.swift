@@ -12,6 +12,9 @@ struct AppListView: View {
         let quiet = policy.document.apps
             .map(\.appID)
             .filter { id in !observed.contains { $0.appID == id } }
+        // Two rows can carry the same bundle ID under different teams, and a row shows the bundle
+        // ID — so they render as one app duplicated. The team is what has to become visible.
+        let ambiguous = AppIdentity.collidingBundleIDs(in: observed.map(\.appID) + quiet)
 
         List {
             Section {
@@ -28,7 +31,8 @@ struct AppListView: View {
                                bypassed: policy.document[app.appID]?.bypass ?? false,
                                allowed: app.allowedCount, denied: app.deniedCount,
                                pending: app.destinations.values.filter(\.denied).count,
-                               bytesInbound: app.bytesInbound, bytesOutbound: app.bytesOutbound)
+                               bytesInbound: app.bytesInbound, bytesOutbound: app.bytesOutbound,
+                               showsTeam: ambiguous.contains(String(AppIdentity(raw: app.appID).bundleID)))
                     }
                 }
                 ForEach(quiet, id: \.self) { appID in
@@ -38,7 +42,8 @@ struct AppListView: View {
                         AppRow(appID: appID, blanket: policy.document[appID]?.blanket,
                                bypassed: policy.document[appID]?.bypass ?? false,
                                allowed: 0, denied: 0, pending: 0,
-                               bytesInbound: 0, bytesOutbound: 0)
+                               bytesInbound: 0, bytesOutbound: 0,
+                               showsTeam: ambiguous.contains(String(AppIdentity(raw: appID).bundleID)))
                     }
                 }
             } header: {
@@ -51,6 +56,13 @@ struct AppListView: View {
                     Text("↓ received and ↑ sent are totals since the counting window began, from "
                          + "closed flows only. They are cleared for every app at once by Reset "
                          + "counters in Settings.")
+                    if !ambiguous.isEmpty {
+                        Text("Where two rows carry the same bundle ID, the team it was signed "
+                             + "under follows it. \"no team\" is a platform-signed flow — traffic a "
+                             + "system framework made on the app's behalf, such as a purchase. "
+                             + "Rules are keyed on the whole identifier, so those rows are "
+                             + "separate apps to the filter.")
+                    }
                 }
             }
             .icebergRows()
@@ -73,8 +85,15 @@ struct AppRow: View {
     let pending: Int
     let bytesInbound: UInt64
     let bytesOutbound: UInt64
+    /// Another row carries this bundle ID under a different team, so the bundle ID alone does not
+    /// say which app this row is.
+    let showsTeam: Bool
 
     private var identity: AppIdentity { AppIdentity(raw: appID) }
+    private var subtitle: String {
+        showsTeam ? "\(identity.displayBundleID) · \(identity.displayTeamID)"
+                  : identity.displayBundleID
+    }
     private var hasTraffic: Bool { bytesInbound > 0 || bytesOutbound > 0 }
 
     var body: some View {
@@ -98,10 +117,11 @@ struct AppRow: View {
                             .foregroundStyle(Theme.warning)
                     }
                 }
-                Text(identity.displayBundleID)
+                Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 HStack(spacing: 8) {
                     if bypassed {
                         Text("not filtered — nothing recorded")

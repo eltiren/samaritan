@@ -129,7 +129,9 @@ struct AppDetailView: View {
                 ))
                 .disabled(isBypassed)
             } header: {
-                Text(identity.displayBundleID)
+                // With siblings present the bundle ID is ambiguous — it is the same on every one of
+                // them — so the header has to be the whole identifier to say which row this is.
+                Text(siblings.isEmpty ? identity.displayBundleID : appID)
             } footer: {
                 Text("Allow all permits everything this app is not specifically denied — by its own "
                      + "deny list or a global one. Off, it is denied everything not specifically "
@@ -159,8 +161,9 @@ struct AppDetailView: View {
                 } footer: {
                     Text("Rules are keyed on the whole identifier the flow carries, so these are "
                          + "separate apps as far as the filter is concerned. Extensions, helper "
-                         + "processes and re-signed builds all land here. Bypassing this row does "
-                         + "not bypass them.")
+                         + "processes and re-signed builds all land here, and so does the same app "
+                         + "under an empty team — that is a system framework making a flow on its "
+                         + "behalf. Bypassing this row does not bypass them.")
                 }
                 .icebergRows()
             }

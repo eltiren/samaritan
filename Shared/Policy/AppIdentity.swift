@@ -50,4 +50,37 @@ public struct AppIdentity: Hashable, Sendable {
     public var displayBundleID: String {
         isUnattributed ? "Unattributed" : String(bundleID)
     }
+
+    /// How the team half reads when a bundle ID turns up under more than one of them.
+    ///
+    /// An empty team is not a missing value — it is the signature of a platform binary, and
+    /// measured on device it is also how a flow a *system framework* makes on a third-party app's
+    /// behalf arrives: NordVPN's own traffic came in as `W5W395V82Y.com.nordvpn.NordVPN` while its
+    /// StoreKit traffic came in as `.com.nordvpn.NordVPN`. Both are that app in the Apps list and
+    /// both show the same bundle ID, so without this they read as one row duplicated.
+    public var displayTeamID: String {
+        teamID.isEmpty ? "no team" : String(teamID)
+    }
+
+    /// Bundle IDs that turn up under more than one identifier in `appIDs`.
+    ///
+    /// A list row shows the bundle ID, not the identifier policy is keyed on, so two of these render
+    /// identically and read as one app listed twice — the reported bug. They are genuinely separate
+    /// policy targets, so the answer is to show `displayTeamID` on exactly the rows where it is
+    /// doing the distinguishing, not to merge them.
+    public static func collidingBundleIDs(in appIDs: some Sequence<String>) -> Set<String> {
+        var firstSeen: [String: String] = [:]
+        var colliding: Set<String> = []
+        for appID in appIDs {
+            let bundle = String(AppIdentity(raw: appID).bundleID)
+            if let other = firstSeen[bundle] {
+                // A repeat of the *same* identifier is not a collision — the caller concatenates
+                // two lists and a duplicate across them would otherwise label every row.
+                if other != appID { colliding.insert(bundle) }
+            } else {
+                firstSeen[bundle] = appID
+            }
+        }
+        return colliding
+    }
 }
