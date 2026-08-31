@@ -5,49 +5,52 @@ struct AppListView: View {
     @Bindable var diagnostics: DiagnosticsModel
     @Bindable var policy: PolicyStore
 
+    @State private var query = ""
+    @State private var sort: AppListSort = .lastActivity
+    @State private var ascending = AppListSort.lastActivity.defaultsToAscending
+
     var body: some View {
-        let observed = diagnostics.observedApps
-        // Apps with a policy entry but no recent traffic still need a row, or a rule you wrote
-        // yesterday becomes unreachable.
-        let quiet = policy.document.apps
-            .map(\.appID)
-            .filter { id in !observed.contains { $0.appID == id } }
+        let all = entries
         // Two rows can carry the same bundle ID under different teams, and a row shows the bundle
         // ID — so they render as one app duplicated. The team is what has to become visible.
-        let ambiguous = AppIdentity.collidingBundleIDs(in: observed.map(\.appID) + quiet)
+        // Computed over every row rather than the filtered ones: the collision is a property of the
+        // data, and a label that appeared and vanished as the query narrowed would be worse than
+        // one that is simply always right.
+        let ambiguous = AppIdentity.collidingBundleIDs(in: all.map(\.appID))
+        let rows = AppListSort.ordered(all.filter { $0.matches(query) },
+                                       by: sort, ascending: ascending)
 
         List {
             Section {
-                if observed.isEmpty && quiet.isEmpty {
-                    Text("No network activity recorded yet.")
+                if rows.isEmpty {
+                    Text(query.isEmpty ? "No network activity recorded yet."
+                                       : "No app matches \u{201C}\(query)\u{201D}.")
                         .foregroundStyle(Theme.textSecondary)
                 }
-                ForEach(observed, id: \.appID) { app in
+                ForEach(rows) { entry in
                     NavigationLink {
-                        AppDetailView(appID: app.appID, diagnostics: diagnostics, policy: policy)
+                        AppDetailView(appID: entry.appID, diagnostics: diagnostics, policy: policy)
                     } label: {
-                        AppRow(appID: app.appID,
-                               blanket: policy.document[app.appID]?.blanket,
-                               bypassed: policy.document[app.appID]?.bypass ?? false,
-                               allowed: app.allowedCount, denied: app.deniedCount,
-                               pending: app.destinations.values.filter(\.denied).count,
-                               bytesInbound: app.bytesInbound, bytesOutbound: app.bytesOutbound,
-                               showsTeam: ambiguous.contains(String(AppIdentity(raw: app.appID).bundleID)))
-                    }
-                }
-                ForEach(quiet, id: \.self) { appID in
-                    NavigationLink {
-                        AppDetailView(appID: appID, diagnostics: diagnostics, policy: policy)
-                    } label: {
-                        AppRow(appID: appID, blanket: policy.document[appID]?.blanket,
-                               bypassed: policy.document[appID]?.bypass ?? false,
-                               allowed: 0, denied: 0, pending: 0,
-                               bytesInbound: 0, bytesOutbound: 0,
-                               showsTeam: ambiguous.contains(String(AppIdentity(raw: appID).bundleID)))
+                        AppRow(appID: entry.appID,
+                               title: entry.title,
+                               blanket: policy.document[entry.appID]?.blanket,
+                               bypassed: policy.document[entry.appID]?.bypass ?? false,
+                               allowed: entry.allowedCount, denied: entry.deniedCount,
+                               pending: entry.pendingCount,
+                               bytesInbound: entry.bytesInbound,
+                               bytesOutbound: entry.bytesOutbound,
+                               showsTeam: ambiguous.contains(String(AppIdentity(raw: entry.appID).bundleID)))
                     }
                 }
             } header: {
-                Text("Apps")
+                HStack {
+                    Text(query.isEmpty ? "Apps" : "Apps — \(rows.count) of \(all.count)")
+                    Spacer()
+                    // The active order, always visible. Two of the three sorts can produce very
+                    // similar lists — the busiest app is usually also the most recent one — so
+                    // without this you cannot tell which one you are looking at.
+                    Text(sort.directionLabel(ascending: ascending))
+                }
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Per-app history is bounded at \(ObservedStore.maximumDestinationsPerApp) "
@@ -73,11 +76,77 @@ struct AppListView: View {
         .foregroundStyle(Theme.textPrimary)
         .navigationTitle("Apps")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Name or bundle ID")
+        // Bundle IDs are lowercase and full of dots. Autocapitalisation and autocorrection both
+        // fight a query like "com.nordvpn".
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { sortMenu }
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            // Inline, or each picker becomes a submenu and the whole thing takes two taps to
+            // read let alone change.
+            Picker("Sort by", selection: $sort) {
+                ForEach(AppListSort.allCases) { field in
+                    Text(field.label).tag(field)
+                }
+            }
+            .pickerStyle(.inline)
+            Picker("Order", selection: $ascending) {
+                // The field's natural direction is listed first, so the menu never opens on
+                // "Z to A, A to Z".
+                let natural = sort.defaultsToAscending
+                Text(sort.directionLabel(ascending: natural)).tag(natural)
+                Text(sort.directionLabel(ascending: !natural)).tag(!natural)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Sort", systemImage: "arrow.up.arrow.down")
+        }
+        .onChange(of: sort) { _, newField in
+            // Picking a field resets the direction to the one that field reads best in. Without
+            // this, choosing Name straight after Traffic lands you on Z to A, which reads as the
+            // sort having failed.
+            ascending = newField.defaultsToAscending
+        }
+    }
+
+    /// One row per identifier, with the display name resolved up front.
+    ///
+    /// The rows used to resolve their own names as they scrolled into view, which was enough when
+    /// the order was fixed. Sorting and searching both need a name for every app before the first
+    /// row is drawn, so it is resolved here — through the name-only lookup, not the one that also
+    /// decodes an icon.
+    private var entries: [AppListEntry] {
+        let observed = diagnostics.observedApps
+        var seen = Set(observed.map(\.appID))
+        var rows = observed.map {
+            AppListEntry(appID: $0.appID, title: title(for: $0.appID), observed: $0)
+        }
+        // Apps with a policy entry but no recent traffic still need a row, or a rule you wrote
+        // yesterday becomes unreachable.
+        for appID in policy.document.apps.map(\.appID) where seen.insert(appID).inserted {
+            rows.append(AppListEntry(appID: appID, title: title(for: appID), observed: nil))
+        }
+        return rows
+    }
+
+    private func title(for appID: String) -> String {
+        let identity = AppIdentity(raw: appID)
+        return AppMetadata.displayName(forBundleID: String(identity.bundleID))
+            ?? identity.displayBundleID
     }
 }
 
 struct AppRow: View {
     let appID: String
+    /// Resolved by the list, not here: it is the same string the list sorted and searched on, and
+    /// two lookups of the same name are two chances for the row and the order to disagree.
+    let title: String
     let blanket: BlanketMode?
     let bypassed: Bool
     let allowed: Int
@@ -104,8 +173,7 @@ struct AppRow: View {
                 .opacity(bypassed ? 0.45 : 1)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(AppMetadata.entry(forBundleID: String(identity.bundleID)).displayName
-                         ?? identity.displayBundleID)
+                    Text(title)
                         .font(.callout)
                         .lineLimit(1)
                     if bypassed {

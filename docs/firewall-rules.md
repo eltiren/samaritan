@@ -524,10 +524,31 @@ Measured working in milestone 1, and unchanged by this spec: [DERIVED]
 
 ### 7.1 App list
 
-Apps that have initiated any network activity, most recent first. Each row: identity, counts of
-allowed / denied / observed-pending, last activity, and — trailing, in the *Settings › Cellular*
-idiom — the bytes that app has received and sent. A bypassed row shows no traffic figure at all
-rather than a stale one, for the same reason its counts are replaced.
+Apps that have initiated any network activity. Each row: identity, counts of allowed / denied /
+observed-pending, last activity, and — trailing, in the *Settings › Cellular* idiom — the bytes that
+app has received and sent. A bypassed row shows no traffic figure at all rather than a stale one,
+for the same reason its counts are replaced.
+
+**Search** matches the displayed name *and* the whole `sourceAppIdentifier`, so a bundle ID types as
+well as a name and a team ID finds every row signed under it.
+
+**Sort** is a field plus a direction: last activity (the original order, newest first), name, or
+traffic — total received plus sent. Picking a field resets the direction to the one that field reads
+best in, and the direction is labelled per field (*Most first*, not *Descending*). Ties break on the
+identifier in a fixed direction: sorting by traffic ties every app that has moved nothing, and the
+app re-reads the store on a timer, so an unstable tie would visibly reshuffle the list once a second.
+
+Both the search and the name sort run over the *displayed* name, which means resolving a name for
+every app before the first row is drawn rather than as rows scroll into view — through a name-only
+lookup, because the icon half of that private call decodes and samples up to seven candidate images
+per app.
+
+**Two rows can carry the same bundle ID** under different team identifiers, and a row shows the
+bundle ID, so they render as one app duplicated. Measured on device: NordVPN's own traffic arrives
+as `W5W395V82Y.com.nordvpn.NordVPN` and its StoreKit traffic as `.com.nordvpn.NordVPN`, with the
+empty team of a platform binary — a flow a system framework made on the app's behalf. [DEVICE] They
+are separate policy targets (bypassing one does not bypass the other), so they stay separate rows
+and the team is shown after the bundle ID on exactly the rows where it is doing the distinguishing.
 
 **App icons and display names are not obtainable through any public iOS API.** [DERIVED]
 
@@ -566,10 +587,12 @@ once.
    It means *allow everything I have not specifically denied, and that no global deny list bans* —
    not "allow everything". Turning it **off** for an Apple app is supported and puts that app under
    default-deny like any other.
-2. **Same bundle, other identifiers** — shown only when they exist. Extensions, helper processes and
-   re-signed builds produce separate identifiers for what a person thinks of as one app, and each is
-   a separate policy. Listing them is what stops "I bypassed Netflix and it still doesn't play" from
-   being a mystery; each carries a one-tap *Bypass too*.
+2. **Same bundle, other identifiers** — shown only when they exist. Extensions, helper processes,
+   re-signed builds and the same app under an empty team (§7.1) produce separate identifiers for
+   what a person thinks of as one app, and each is a separate policy. Listing them is what stops "I
+   bypassed Netflix and it still doesn't play" from being a mystery; each carries a one-tap *Bypass
+   too*. When they exist, the section header above becomes the whole identifier rather than the
+   bundle ID, which is identical on every one of them.
 3. **Allowed** — this app's allow rules.
 4. **Denied** — this app's deny rules.
 5. **Observed** — attempted, undecided, and therefore dropped.

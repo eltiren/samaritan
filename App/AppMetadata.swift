@@ -23,11 +23,29 @@ enum AppMetadata {
     }
 
     private static var cache: [String: Entry] = [:]
+    private static var names: [String: String?] = [:]
 
     static func entry(forBundleID bundleID: String) -> Entry {
         if let cached = cache[bundleID] { return cached }
         let resolved = lookup(bundleID)
         cache[bundleID] = resolved
+        return resolved
+    }
+
+    /// The app's own name, without touching its icon.
+    ///
+    /// Split out from `entry(forBundleID:)` because sorting or searching the Apps list needs a name
+    /// for *every* app at once, while a row only needs an icon when it scrolls into view. Resolving
+    /// an icon is not cheap — `icon(forBundleID:)` below decodes and samples up to seven candidate
+    /// images — so going through `entry` here would do that work for three hundred apps inside a
+    /// view update. A name is one property read.
+    static func displayName(forBundleID bundleID: String) -> String? {
+        // Two levels of optional: the miss is `nil`, a cached "this app has no name" is `.some(nil)`.
+        // Negative results have to be cached too, or every keystroke re-asks about every app the
+        // lookup already failed on.
+        if let cached = names[bundleID] { return cached }
+        let resolved = lookupName(bundleID)
+        names[bundleID] = resolved
         return resolved
     }
 
@@ -48,27 +66,30 @@ enum AppMetadata {
 
     #if SAMARITAN_NO_PRIVATE_API
     private static func lookup(_ bundleID: String) -> Entry { Entry() }
+    private static func lookupName(_ bundleID: String) -> String? { nil }
     #else
     private static func lookup(_ bundleID: String) -> Entry {
+        Entry(displayName: displayName(forBundleID: bundleID), icon: icon(forBundleID: bundleID))
+    }
+
+    private static func lookupName(_ bundleID: String) -> String? {
         guard let proxyClass = NSClassFromString("LSApplicationProxy") as? NSObject.Type else {
-            return Entry()
+            return nil
         }
         let selector = NSSelectorFromString("applicationProxyForIdentifier:")
         guard proxyClass.responds(to: selector),
               let proxy = proxyClass.perform(selector, with: bundleID)?.takeUnretainedValue() as? NSObject
-        else { return Entry() }
+        else { return nil }
 
-        var name: String?
         for key in ["localizedName", "localizedShortName"] {
             let getter = NSSelectorFromString(key)
             if proxy.responds(to: getter),
                let value = proxy.perform(getter)?.takeUnretainedValue() as? String,
                !value.isEmpty {
-                name = value
-                break
+                return value
             }
         }
-        return Entry(displayName: name, icon: icon(forBundleID: bundleID))
+        return nil
     }
 
     /// The icon format argument is an undocumented enum whose accepted values differ per app and
