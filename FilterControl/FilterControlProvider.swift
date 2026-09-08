@@ -4,14 +4,22 @@ import OSLog
 
 /// Reached only when `FilterDataProvider` answers `.needRules()`.
 ///
-/// Purpose in milestone 1 is to answer, empirically:
+/// This is the writing half of the filter. A flow the policy denies is escalated here so that
+/// this process — which, unlike the data provider, can write to the App Group — records the
+/// destination in that app's Observed list before dropping it. That record is what turns a
+/// freshly denied app into a working one, and it is the only route by which anything about a
+/// denied flow reaches the UI.
 ///
-/// 1. Is this process actually launched on a current iOS, and how quickly?
-/// 2. Does it see the *same* flow metadata as the data provider (same `sourceAppIdentifier`,
-///    same endpoint), or more/less?
-/// 3. Does `allow(withUpdateRules: true)` reliably produce `handleRulesChanged()` in the data
-///    provider — i.e. is this a usable push channel?
-/// 4. Does `handleReport(_:)` fire here, there, or both?
+/// What the escalation channel costs and guarantees, measured rather than assumed:
+///
+/// * The round trip is bimodal — ~1.4 ms median while this process is warm, up to ~28 ms when it
+///   must be woken. Affordable for a flow that is being denied anyway; too slow to decide one
+///   that might be allowed, which would lose connection races.
+/// * `allow(withUpdateRules: true)` does reliably produce `handleRulesChanged()` in the data
+///   provider. It is the only push channel there is, it carries no payload, and a `.drop()` is
+///   always `withUpdateRules: false` — see `RulesChangeSignal` for why that pairing matters.
+/// * Escalated flows produce no `NEFilterReport`, so the report channel cannot be used to confirm
+///   that a drop took effect.
 ///
 /// Architectural note carried over from Sift (2018): the control provider is a *separate process*
 /// with no shared memory with the data provider. The only channels are the App Group container and

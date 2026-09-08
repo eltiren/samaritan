@@ -5,14 +5,18 @@ import Synchronization
 
 /// The hot path.
 ///
-/// Milestone-1 scope: observe everything, allow by default, drop on one trivial rule, and record
-/// enough per-flow metadata to answer the NordVPN coexistence questions after the fact.
+/// Every flow on the device arrives here and leaves with a final verdict. The order is fixed:
+/// the bypass check first (Rule 3c in `AGENTS.md`), then the compiled policy, then — only when
+/// none is loaded — the trivial fallback rule set, so a missing file never silently changes
+/// behaviour. Under `denyMode = .escalate` the first denial of a given destination for a given
+/// app is escalated to `FilterControlProvider` — the process that can write — so the
+/// destination reaches the Observed list before the flow is dropped; repeats drop inline.
 ///
 /// Constraints this code is written against (verified in the iOS 26.5 SDK headers, not assumed):
 ///
 /// * `applySettings(_:)`, `NEFilterSettings` and `NENetworkRule` are **macOS-only**. On iOS there is
 ///   no kernel-side prefilter — *every* flow lands in `handleNewFlow(_:)` and must be decided in
-///   Swift. That is the single most important input to the milestone-2 policy engine design.
+///   Swift. That constraint is what the policy engine in `Shared/Policy` is shaped around.
 /// * `pauseVerdict`, `resumeFlow(_:with:)` and `updateFlow(_:using:for:)` are macOS-only. On iOS a
 ///   verdict is final at the moment it is returned; there is no "decide later".
 /// * `sourceAppAuditToken` is macOS-only. `sourceAppIdentifier` is the only app identity we get.

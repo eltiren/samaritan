@@ -1,8 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// Diagnostic UI only — deliberately unstyled. Its job is to make the milestone-1 questions
-/// answerable at a glance on a physical device, including while NordVPN is connected.
+/// The Settings tab: filter state, App Group health, policy-engine stats and publish/reset,
+/// network path and VPN detection, ring-file storage, the global counters, and the diagnostics
+/// export.
+///
+/// Everything here has to be answerable at a glance on the device itself, because the extensions
+/// are separate processes that log to Console.app rather than to Xcode. The explanatory footers
+/// are part of that job, not decoration — a row reading "provider storage: denied" means nothing
+/// without the sentence underneath it.
 struct DiagnosticsView: View {
     @Bindable var filter: FilterController
     @Bindable var diagnostics: DiagnosticsModel
