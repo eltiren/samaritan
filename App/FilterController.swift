@@ -150,8 +150,9 @@ final class FilterController {
             Either you declined the "filter network content" prompt, or this build is not allowed to \
             configure a content filter on this device. Per TN3134, in a *distribution* build a global \
             iOS content filter requires a supervised device. A *development*-signed build (get-task-allow \
-            = true, installed from Xcode) is the path this spike targets; if you see this error on a \
-            development build, that is a milestone-1 result worth recording in README.md.
+            = true, installed from Xcode) is the path this project targets; if you see this error on \
+            a development build, confirm the build really is development-signed — get-task-allow \
+            must be true in the installed app's entitlements.
             """
         case .configurationInvalid:
             return """

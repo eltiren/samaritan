@@ -4,8 +4,9 @@ import Foundation
 ///
 /// Every structure here is a fixed-size record in a contiguous array, referenced by index. There is
 /// no object graph and no dictionary, because the data provider will eventually `mmap` these arrays
-/// read-only and must not build anything: it cannot write, anywhere (see `README.md`). Keeping the
-/// matchers index-based means the same code works unchanged over mapped memory.
+/// read-only and must not build anything: it cannot write, anywhere (see *Architecture* in
+/// `README.md`, and Rule 3 in `AGENTS.md`). Keeping the matchers index-based means the same code
+/// works unchanged over mapped memory.
 public struct CompiledPolicy: Sendable {
 
     // MARK: - Records

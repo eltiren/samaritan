@@ -1,6 +1,8 @@
 # Samaritan — firewall rule model
 
-**Status: draft specification. No code written against this yet.**
+**Status: implemented.** `Shared/Policy` is written against this document — `PolicyCompiler`,
+`CompiledPolicy` and `PolicyEngine` follow the ladder in §2. Where a section is still marked
+[PROPOSED] or carries an open question, the code follows the proposal unless it says otherwise.
 
 This document turns the stated intent into a resolver that can actually be implemented, marks the
 places where the intent was ambiguous or self-contradictory, and proposes a default for each so the
@@ -9,12 +11,15 @@ spec is usable even before every question is answered.
 Notation used throughout:
 
 - **[STATED]** — taken directly from the requirements.
-- **[DERIVED]** — a consequence of a stated requirement plus a milestone-1 on-device finding.
+- **[DERIVED]** — a consequence of a stated requirement plus an on-device finding.
 - **[PROPOSED]** — a decision I made to fill a gap; overridable.
 - **[Qn]** — an open question. Answers change behaviour. Collected in *Open questions*.
 - **[VERIFY]** — depends on device behaviour not yet measured.
+- **[DEVICE]** — measured on hardware.
 
-Milestone-1 findings referenced here are in [`../README.md`](../README.md).
+The platform constraints this model is built around are summarised in
+[`../README.md`](../README.md#limitations-worth-knowing); the measurements behind them are in the
+git history of that file.
 
 ---
 
@@ -95,8 +100,24 @@ Apps list restores playback. [DEVICE]
 
 What remains open is narrower: whether one identifier is enough for such an app, or whether its
 extensions and helpers need bypassing too. That is a per-app fact rather than a platform one, which
-is why the app screen lists siblings instead of guessing (§7.2). The `IDENT NEW` line in
-`FilterDataProvider` reports it; see the capture procedure in `README.md`.
+is why the app screen lists siblings instead of guessing (§7.2).
+
+`FilterDataProvider.noteIdentity` logs each distinct identifier once, verbatim, distinguishing
+`nil` from empty; `logEveryFlow` (Settings, on by default) additionally prints `app=` per flow. To
+capture what an app really produces:
+
+```sh
+idevicesyslog -u <UDID> | tee ~/device.log
+# then, on the phone: open the app under test and drive the feature you care about
+grep "IDENT NEW" ~/device.log
+grep -ohE "app=[^ ]*" ~/device.log | sort | uniq -c | sort -rn
+```
+
+`IDENT NEW` reports the raw string, the team and bundle halves, whether it parses as an Apple
+platform binary, whether it is currently bypassed, the protocol, and the hostname of the flow that
+introduced it. What to look for: more than one identifier per app (extensions and helpers have
+their own, and each needs its own bypass); the same bundle ID under two teams, the empty one being
+a system framework acting on the app's behalf; and an identifier that is not the app at all.
 
 ---
 

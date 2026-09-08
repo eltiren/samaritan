@@ -106,7 +106,14 @@ The mirror image applies to a file whose *shape* changes: `observed.json` gained
 `version` key is deliberately **required** on decode, because a wrapper of all-optional keys happily
 decodes a legacy payload as an empty wrapper.
 
-## Rule 4: this is a spike
+## Rule 4: platform claims are measured, not assumed
 
-Milestone 1 proves NetworkExtension behaves on a real device. Do not build the CIDR/policy engine,
-feed downloader, or per-app policy UI until `README.md`'s "On-device results" table is filled in.
+What iOS gives a content filter is thinly documented and differs from macOS in ways that are not
+obvious from the headers. Every constraint this codebase is built around — that the data provider
+cannot write, that a hostname is often the only usable matcher, that escalation is bimodal in
+latency — came from running it on a device, and the comments say so where it matters.
+
+So: do not add behaviour that depends on an unverified platform assumption. Measure it on hardware
+first, then write the code the measurement justifies, and record the finding next to the code that
+relies on it. `docs/firewall-rules.md` marks its claims **[STATED]** / **[DERIVED]** /
+**[PROPOSED]** / **[DEVICE]** for the same reason — keep that up when you edit it.

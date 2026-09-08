@@ -133,11 +133,11 @@ public struct SpikeConfiguration: Codable, Sendable, Equatable {
     }
 }
 
-/// Trivial matcher for the spike's one hard-coded blocking rule.
+/// Trivial matcher for the hard-coded blocking rule. A fallback, not the engine.
 ///
-/// Linear scan over a handful of entries, on purpose. The real engine (radix trie over IPv4/IPv6
-/// prefixes) belongs to milestone 2 and must not be started until the on-device results in
-/// `README.md` are filled in.
+/// Linear scan over a handful of entries, on purpose. The real engine is `Shared/Policy` —
+/// `PolicyCompiler` into `CompiledPolicy`'s flat index — and `FilterDataProvider.resolve`
+/// prefers it. This runs only for flows that arrive before a compiled policy has been loaded.
 public struct SpikeRuleSet: Sendable {
 
     private let hostSuffixes: [String]
